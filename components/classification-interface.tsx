@@ -14,12 +14,10 @@ import {
   Check,
   FolderTree,
   X,
-  MapPin,
   Lock,
   Search,
   Trash2,
   Folder,
-  Users,
   Edit2,
   Plus,
   Download,
@@ -28,8 +26,12 @@ import {
   ChevronRight,
   LinkIcon,
   Pencil,
+  Filter,
+  XSquare,
 } from "lucide-react"
 import type { Database } from "@/lib/types"
+import { FolderFilterDrawer } from "@/components/folder-filter-drawer"
+import type { FolderNode } from "@/components/folder-tree"
 
 type Document = Database["public"]["Tables"]["documents"]["Row"]
 type ExecutiveDirector = {
@@ -50,8 +52,10 @@ type ExecutiveDirector = {
 }
 
 interface ClassificationInterfaceProps {
-  documents: Document[]
+  documents?: Document[]
   organizationalStructure: ExecutiveDirector[]
+  folders?: FolderNode[]
+  documentCounts?: Record<string, number>
 }
 
 type DocumentClassification = {
@@ -62,7 +66,6 @@ type DocumentClassification = {
   departmentName?: string
   secretaryId?: string
   executiveDirectorId?: string
-  location?: string
   access_level?: string
   priority?: string
 }
@@ -78,8 +81,13 @@ type DocumentType = {
   name: string
 }
 
-export function ClassificationInterface({ documents, organizationalStructure }: ClassificationInterfaceProps) {
-  const [unclassifiedDocs, setUnclassifiedDocs] = useState(documents.filter((d) => d.status !== "classified"))
+export function ClassificationInterface({
+  documents = [],
+  organizationalStructure,
+  folders = [],
+  documentCounts = {},
+}: ClassificationInterfaceProps) {
+  const [unclassifiedDocs, setUnclassifiedDocs] = useState(documents?.filter((d) => d.status !== "classified") || [])
   const [classifiedDocs, setClassifiedDocs] = useState<ClassifiedDocument[]>([])
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
   const [classifications, setClassifications] = useState<Record<string, DocumentClassification>>({})
@@ -88,6 +96,10 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
   const [selectedUnclassifiedIds, setSelectedUnclassifiedIds] = useState<Set<string>>(new Set())
   const [selectAllClassifiedMode, setSelectAllClassifiedMode] = useState<"page" | "all">("page")
   const [selectAllUnclassifiedMode, setSelectAllUnclassifiedMode] = useState<"page" | "all">("page")
+
+  // Folder filtering state
+  const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([])
+  const [isFolderDrawerOpen, setIsFolderDrawerOpen] = useState(false)
 
   const [documentTypes, setDocumentTypes] = useState<DocumentType[]>([])
   const [editingDocId, setEditingDocId] = useState<string | null>(null)
@@ -102,7 +114,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
   const [editingAccessLevel, setEditingAccessLevel] = useState<string | null>(null)
   const [editingDivision, setEditingDivision] = useState<string | null>(null)
   const [editingDepartment, setEditingDepartment] = useState<string | null>(null)
-  const [editingLocation, setEditingLocation] = useState<string | null>(null)
   const [editingPriority, setEditingPriority] = useState<string | null>(null)
 
   const [divisionColors, setDivisionColors] = useState<Record<string, string>>({}) // Renamed from divisionColorsMap
@@ -133,7 +144,7 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
     fetchDocumentTypes()
     fetchDivisionColors()
     fetchUnclassifiedDocuments()
-  }, [currentPage, pageSize, searchQuery])
+  }, [currentPage, pageSize, searchQuery, selectedFolderIds])
 
   const fetchDivisionColors = async () => {
     const supabase = createClient()
@@ -175,6 +186,11 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
       // Apply search filter on server
       if (searchQuery.trim()) {
         query = query.ilike("title", `%${searchQuery.trim()}%`)
+      }
+
+      // Apply folder filter: use folder_id index for efficient filtering
+      if (selectedFolderIds.length > 0) {
+        query = query.in("folder_id", selectedFolderIds)
       }
 
       // Get total count
@@ -366,7 +382,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
         secretary_id: classification.secretaryId,
         division_id: classification.divisionId,
         department_id: departmentId,
-        location: doc!.location || null,
         access_level: classification.access_level,
         priority: classifications[doc!.id]?.priority || doc?.priority,
         status: "classified",
@@ -405,58 +420,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
     }
   }
 
-  const handleLocationSelectWithGroup = async (location: string, classifyWholeGroup = false) => {
-    if (!selectedDocId) {
-      alert("Please select a document first")
-      return
-    }
-
-    setClassifications((prev) => ({
-      ...prev,
-      [selectedDocId]: {
-        ...prev[selectedDocId],
-        location: location,
-      },
-    }))
-
-    const supabase = createClient()
-    const selectedDoc = unclassifiedDocs.find((d) => d.id === selectedDocId)
-    const docsToUpdate =
-      classifyWholeGroup && selectedDoc?.group_name
-        ? unclassifiedDocs.filter((d) => d.group_name === selectedDoc.group_name)
-        : [selectedDoc].filter(Boolean)
-
-    try {
-      for (const doc of docsToUpdate) {
-        const { error } = await supabase.from("documents").update({ location: location }).eq("id", doc!.id)
-        if (error) throw error
-      }
-
-      // Update local state
-      setUnclassifiedDocs((prev) =>
-        prev.map((doc) => {
-          if (docsToUpdate.some((d) => d!.id === doc.id)) {
-            return { ...doc, location }
-          }
-          return doc
-        }),
-      )
-
-      // Also update classification state for selected doc
-      if (selectedDocId && docsToUpdate.some((d) => d!.id === selectedDocId)) {
-        setClassifications((prev) => ({
-          ...prev,
-          [selectedDocId]: {
-            ...prev[selectedDocId],
-            location: location,
-          },
-        }))
-      }
-    } catch (error) {
-      console.error("Error updating location:", error)
-      alert("Failed to update location. Please try again.")
-    }
-  }
 
   const handleUnclassify = async (docId: string) => {
     const supabase = createClient()
@@ -713,23 +676,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
     }
   }
 
-  const handleUpdateLocation = async (docId: string, location: string | null) => {
-    const supabase = createClient()
-    try {
-      const { error } = await supabase
-        .from("documents")
-        .update({ location: location || null })
-        .eq("id", docId)
-
-      if (error) throw error
-
-      await fetchClassifiedDocuments()
-      setEditingLocation(null)
-    } catch (error) {
-      console.error("Error updating location:", error)
-      alert("Failed to update location. Please try again.")
-    }
-  }
 
   const handleUpdatePriority = async (docId: string, priority: string) => {
     const supabase = createClient()
@@ -781,13 +727,58 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
     }
   }
 
+  const handleFileUrlUpdate = async (url: string) => {
+    if (!selectedDocId) {
+      alert("Please select a document first")
+      return
+    }
+
+    const supabase = createClient()
+    try {
+      const clean = url.trim()
+      const { error } = await supabase
+        .from("documents")
+        .update({ file_url: clean || null })
+        .eq("id", selectedDocId)
+
+      if (error) throw error
+
+      // Update local state
+      setUnclassifiedDocs((prev) =>
+        prev.map((doc) => (doc.id === selectedDocId ? { ...doc, file_url: clean || null } : doc)),
+      )
+
+      console.log("[v0] File URL updated successfully")
+    } catch (error) {
+      console.error("[v0] Error updating file URL:", error)
+      alert("Failed to update file URL. Please try again.")
+    }
+  }
+
+  // Build a Google Drive search URL from the stored path
+  const buildDriveSearchLink = (raw: string | null | undefined) => {
+    if (!raw) return null
+    const normalized = raw.trim().replace(/\\/g, "/")
+    const q = encodeURIComponent(normalized)
+    return `https://drive.google.com/drive/search?q=${q}`
+  }
+
+  // Prefer explicit file_url, else fallback to Drive search using path
+  const buildOpenLink = (doc: Document | undefined) => {
+    if (!doc) return "#"
+    const url = (doc.file_url || "").trim()
+    if (url) return url
+    const path = (doc.path || "").trim()
+    const search = buildDriveSearchLink(path)
+    return search || "#"
+  }
+
   const handleSort = (
     field:
       | "title"
       | "access_level"
       | "division"
       | "department"
-      | "location"
       | "group_name"
       | "document_type"
       | "priority",
@@ -848,10 +839,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
       } else if (sortCol.field === "department") {
         aValue = a.department_name || ""
         bValue = b.department_name || ""
-        result = aValue.localeCompare(bValue)
-      } else if (sortCol.field === "location") {
-        aValue = a.location || ""
-        bValue = b.location || ""
         result = aValue.localeCompare(bValue)
       } else if (sortCol.field === "document_type") {
         aValue = (a as any).document_type?.name || ""
@@ -1321,9 +1308,9 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
                                 onCheckedChange={() => toggleSelectDocument(doc.id, false)}
                                 className="mt-0.5"
                               />
-                              <button
-                                onClick={() => handleDocumentClick(doc.id)}
-                                className="flex-1 text-left hover:text-primary transition-colors min-w-0"
+                              <div
+                                onClick={() => !editingUnclassifiedDocId && handleDocumentClick(doc.id)}
+                                className="flex-1 text-left hover:text-primary transition-colors min-w-0 cursor-pointer"
                               >
                                 {editingUnclassifiedDocId === doc.id ? (
                                   <div className="flex items-center gap-2 mb-2" onClick={(e) => e.stopPropagation()}>
@@ -1383,7 +1370,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
                                 {(classification?.access_level ||
                                   classification?.divisionName ||
                                   classification?.departmentName ||
-                                  classification?.location ||
                                   doc.priority) && (
                                   <div className="flex flex-wrap gap-1.5">
                                     {classification?.access_level && (
@@ -1421,14 +1407,8 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
                                         {classification.departmentName}
                                       </span>
                                     )}
-                                    {classification?.location && (
-                                      <Badge variant="outline" className="gap-1 rounded-full text-xs px-2 py-0.5">
-                                        <MapPin className="h-3 w-3" />
-                                        {classification.location}
-                                      </Badge>
-                                    )}
                                     {doc.priority && (
-                                      <button
+                                      <div
                                         onClick={(e) => {
                                           e.stopPropagation()
                                           handlePriorityRemove(doc.id)
@@ -1441,11 +1421,11 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
                                         title="Click to remove priority"
                                       >
                                         {doc.priority.charAt(0).toUpperCase() + doc.priority.slice(1)}
-                                      </button>
+                                      </div>
                                     )}
                                   </div>
                                 )}
-                              </button>
+                              </div>
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -1494,21 +1474,24 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
                 <p className="text-sm text-muted-foreground text-center py-4">Select a document to add a path</p>
               ) : (
                 <div className="space-y-2">
-                  <Input
-                    type="url"
-                    placeholder="https://drive.google.com/..."
-                    defaultValue={selectedDoc?.path || ""}
-                    onBlur={(e) => handlePathUpdate(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        handlePathUpdate(e.currentTarget.value)
-                      }
-                    }}
-                    className="text-sm"
-                  />
-                  {selectedDoc?.path && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Folder Path (for filtering)</p>
+                    <Input
+                      type="text"
+                      placeholder="Indexes and lists/Official+list+of+books+and+materials.pdf"
+                      defaultValue={selectedDoc?.path || ""}
+                      onBlur={(e) => handlePathUpdate(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handlePathUpdate(e.currentTarget.value)
+                        }
+                      }}
+                      className="text-sm"
+                    />
+                  </div>
+                  {(selectedDoc?.file_url || selectedDoc?.path) && (
                     <a
-                      href={selectedDoc.path}
+                      href={buildOpenLink(selectedDoc)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
@@ -1579,67 +1562,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <MapPin className="h-4 w-4" />
-                Select Location
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {!selectedDocId ? (
-                <p className="text-sm text-muted-foreground text-center py-4">Select a document to set its location</p>
-              ) : (
-                <div className="space-y-3">
-                  {selectedDoc?.group_name && selectedDocGroupCount > 1 && (
-                    <div className="p-2 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
-                      <div className="flex items-center gap-2 text-xs text-blue-800 dark:text-blue-200 mb-1">
-                        <Users className="h-3 w-3" />
-                        <span className="font-medium">
-                          Group: "{selectedDoc.group_name}" ({selectedDocGroupCount} files)
-                        </span>
-                      </div>
-                      <p className="text-xs text-blue-700 dark:text-blue-300">
-                        Set location for all files in this group
-                      </p>
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    {["Google Drive", "Sent by Email", "Maria's Computer", "Local Server", "Cloud Storage"].map(
-                      (location) => {
-                        const isSelected =
-                          classifications[selectedDocId]?.location === location ||
-                          unclassifiedDocs.find((d) => d.id === selectedDocId)?.location === location
-
-                        return (
-                          <div key={location} className="flex flex-col gap-1">
-                            <Button
-                              onClick={() => handleLocationSelectWithGroup(location, false)}
-                              variant={isSelected ? "default" : "outline"}
-                              size="sm"
-                              className="rounded-full"
-                            >
-                              {location}
-                            </Button>
-                            {selectedDoc?.group_name && selectedDocGroupCount > 1 && (
-                              <Button
-                                onClick={() => handleLocationSelectWithGroup(location, true)}
-                                variant="secondary"
-                                size="sm"
-                                className="rounded-full text-xs"
-                              >
-                                All in group
-                              </Button>
-                            )}
-                          </div>
-                        )
-                      },
-                    )}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
 
           <Card>
             <CardHeader>
@@ -1827,19 +1749,56 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
     <div className="space-y-6">
       <Card>
         <CardContent className="pt-6">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Search documents... (e.g., Update, packs, 1983, HCOPL)"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value)
-                setCurrentPage(1)
-              }}
-              className="pl-10"
-            />
+          <div className="flex gap-2 items-start">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Search documents... (e.g., Update, packs, 1983, HCOPL)"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value)
+                  setCurrentPage(1)
+                }}
+                className="pl-10"
+              />
+            </div>
+            {folders.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => setIsFolderDrawerOpen(true)}
+                className="border border-black flex-shrink-0"
+              >
+                <Filter className="h-4 w-4 mr-2" />
+                Filter by Folder
+                {selectedFolderIds.length > 0 && (
+                  <Badge variant="secondary" className="ml-2">
+                    {selectedFolderIds.length}
+                  </Badge>
+                )}
+              </Button>
+            )}
           </div>
+          {selectedFolderIds.length > 0 && (
+            <div className="mt-3 flex items-center gap-2">
+              <Badge variant="secondary" className="text-xs">
+                <Folder className="h-3 w-3 mr-1" />
+                Filtering by {selectedFolderIds.length} folder{selectedFolderIds.length !== 1 ? "s" : ""}
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSelectedFolderIds([])
+                  setCurrentPage(1)
+                }}
+                className="h-6 px-2 text-xs bg-yellow-400 hover:bg-yellow-500 border border-black"
+              >
+                <XSquare className="h-3 w-3 mr-1" />
+                Clear Filter
+              </Button>
+            </div>
+          )}
           {searchQuery && !loading && (
             <p className="text-sm text-muted-foreground mt-2">
               Found {totalUnclassified} unclassified and {totalClassified} classified documents
@@ -2040,17 +1999,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
                             <sup className="ml-0.5">
                               {sortColumns.findIndex((col) => col.field === "document_type") + 1}
                             </sup>
-                          )}
-                        </span>
-                      )}
-                    </TableHead>
-                    <TableHead className="cursor-pointer" onClick={(e) => handleSort("location", e.shiftKey)}>
-                      Location{" "}
-                      {sortColumns.findIndex((col) => col.field === "location") >= 0 && (
-                        <span className="text-primary">
-                          {sortColumns.find((col) => col.field === "location")?.direction === "asc" ? "↑" : "↓"}
-                          {sortColumns.length > 1 && (
-                            <sup className="ml-0.5">{sortColumns.findIndex((col) => col.field === "location") + 1}</sup>
                           )}
                         </span>
                       )}
@@ -2430,56 +2378,6 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
                           )}
                         </TableCell>
 
-                        <TableCell className="max-w-[150px]">
-                          {editingLocation === doc.id ? (
-                            <div className="space-y-2">
-                              <select
-                                value={doc.location || ""}
-                                onChange={(e) => handleUpdateLocation(doc.id, e.target.value)}
-                                className="w-full h-8 text-sm border rounded px-2"
-                              >
-                                <option value="">None</option>
-                                <option value="Google Drive">Google Drive</option>
-                                <option value="Sent by Email">Sent by Email</option>
-                                <option value="Maria's Computer">Maria's Computer</option>
-                                <option value="Local Server">Local Server</option>
-                                <option value="Cloud Storage">Cloud Storage</option>
-                              </select>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setEditingLocation(null)}
-                                className="w-full h-7 text-xs"
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2 group">
-                              <div className="flex flex-wrap gap-1">
-                                {doc.location ? (
-                                  <Badge
-                                    variant="outline"
-                                    className="gap-1 rounded-full max-w-[140px] whitespace-normal text-center min-h-[28px] py-1.5"
-                                  >
-                                    <MapPin className="h-3 w-3 flex-shrink-0" />
-                                    <span className="break-words">{doc.location}</span>
-                                  </Badge>
-                                ) : (
-                                  <span className="text-sm text-muted-foreground">None</span>
-                                )}
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => setEditingLocation(doc.id)}
-                                className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                              >
-                                <Edit2 className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          )}
-                        </TableCell>
 
                         <TableCell>
                           <div className="flex items-center gap-1">
@@ -2565,6 +2463,19 @@ export function ClassificationInterface({ documents, organizationalStructure }: 
           </div>
         </div>
       )}
+
+      {/* Folder Filter Drawer */}
+      <FolderFilterDrawer
+        open={isFolderDrawerOpen}
+        onOpenChange={setIsFolderDrawerOpen}
+        folders={folders}
+        selectedFolderIds={selectedFolderIds}
+        onApplyFilters={(folderIds) => {
+          setSelectedFolderIds(folderIds)
+          setCurrentPage(1)
+        }}
+        documentCounts={documentCounts}
+      />
     </div>
   )
 }

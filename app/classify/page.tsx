@@ -13,30 +13,48 @@ export default async function ClassifyPage() {
     redirect("/auth/login")
   }
 
-  // Fetch unclassified documents
-  const { data: documents, error: docsError } = await supabase
-    .from("documents")
-    .select("*")
-    .eq("status", "unclassified")
-    .order("created_at", { ascending: true })
-
-  if (docsError) {
-    console.error("[v0] Error fetching documents:", docsError)
-  }
+  // No server-side documents fetch; client paginates within ClassificationInterface.
 
   const { data: executiveDirectors, error: edError } = await supabase
     .from("executive_directors")
-    .select("*")
+    .select("id, name")
     .order("name")
 
-  const { data: secretaries, error: secError } = await supabase.from("secretaries").select("*").order("name")
+  const { data: secretaries, error: secError } = await supabase
+    .from("secretaries")
+    .select("id, name, executive_director_id")
+    .order("name")
 
-  const { data: divisions, error: divError } = await supabase.from("divisions").select("*").order("name")
+  const { data: divisions, error: divError } = await supabase
+    .from("divisions")
+    .select("id, name, secretary_id")
+    .order("name")
 
-  const { data: departments, error: deptError } = await supabase.from("departments").select("*").order("name")
+  const { data: departments, error: deptError } = await supabase
+    .from("departments")
+    .select("id, name, division_id")
+    .order("name")
+
+  // Fetch folders for filtering with document counts from materialized view
+  const { data: folders, error: foldersError } = await supabase
+    .from("folders")
+    .select(`
+      id,
+      name,
+      full_path,
+      level,
+      parent_id,
+      folder_document_counts(document_count)
+    `)
+    .order("full_path")
+    .limit(10000)
 
   if (edError || secError || divError || deptError) {
     console.error("[v0] Error fetching organizational structure:", { edError, secError, divError, deptError })
+  }
+
+  if (foldersError) {
+    console.error("[v0] Error fetching folders:", foldersError)
   }
 
   // Build the hierarchical structure manually
@@ -55,6 +73,26 @@ export default async function ClassifyPage() {
       })),
   }))
 
+  // Extract document counts from the nested folder_document_counts array
+  const folderDocumentCounts: Record<string, number> = {}
+  const processedFolders = (folders || []).map((folder: any) => {
+    const counts = folder.folder_document_counts
+    if (Array.isArray(counts) && counts.length > 0) {
+      folderDocumentCounts[folder.id] = counts[0].document_count || 0
+    } else if (counts && typeof counts === 'object') {
+      folderDocumentCounts[folder.id] = counts.document_count || 0
+    } else {
+      folderDocumentCounts[folder.id] = 0
+    }
+    return {
+      id: folder.id,
+      name: folder.name,
+      full_path: folder.full_path,
+      level: folder.level,
+      parent_id: folder.parent_id,
+    }
+  })
+
   return (
     <>
       <Navigation />
@@ -66,7 +104,11 @@ export default async function ClassifyPage() {
               Select a document and click the appropriate category to classify it
             </p>
           </div>
-          <ClassificationInterface documents={documents || []} organizationalStructure={organizationalStructure} />
+          <ClassificationInterface
+            organizationalStructure={organizationalStructure}
+            folders={processedFolders}
+            documentCounts={folderDocumentCounts}
+          />
         </div>
       </main>
     </>
