@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { createClient } from "@/lib/supabase/client"
-import { FileText, MapPin, FolderTree, Plus, Trash2, Edit2, Check, X } from "lucide-react"
+import { FileText, FolderTree, Plus, Trash2, Edit2, Check, X } from "lucide-react"
+import { bestFolderMatch, normalizeDrivePath, type FolderReference } from "@/lib/path-utils"
 
 type DocumentType = {
   id: string
@@ -36,18 +37,13 @@ interface AdminInterfaceProps {
   organizationalStructure: ExecutiveDirector[]
 }
 
-const LOCATIONS = ["Google Drive", "Sent by Email", "Maria's Computer", "Local Server", "Cloud Storage"]
+
 
 export function AdminInterface({ documentTypes: initialDocTypes, organizationalStructure }: AdminInterfaceProps) {
   const [documentTypes, setDocumentTypes] = useState<DocumentType[]>(initialDocTypes)
-  const [locations, setLocations] = useState<Array<{ id: string; name: string }>>([]) // Changed to store location objects with IDs from database
   const [newDocTypeName, setNewDocTypeName] = useState("")
-  const [newLocation, setNewLocation] = useState("")
   const [editingDocTypeId, setEditingDocTypeId] = useState<string | null>(null)
   const [editingDocTypeName, setEditingDocTypeName] = useState("")
-  const [editingLocationIndex, setEditingLocationIndex] = useState<number | null>(null) // Will be replaced with editingLocationId
-  const [editingLocationName, setEditingLocationName] = useState("")
-  const [editingLocationId, setEditingLocationId] = useState<string | null>(null) // Added to track which location is being edited
   const [divisions, setDivisions] = useState<any[]>([])
   const [newDivisionName, setNewDivisionName] = useState("")
   const [newDivisionColor, setNewDivisionColor] = useState("#CACECF")
@@ -60,6 +56,9 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
   const [editingDepartmentName, setEditingDepartmentName] = useState("")
   const [isDeleting, setIsDeleting] = useState(false)
   const [documentCount, setDocumentCount] = useState(0)
+  const [isBackfilling, setIsBackfilling] = useState(false)
+  const [backfillUpdatedCount, setBackfillUpdatedCount] = useState(0)
+  const [backfillTotal, setBackfillTotal] = useState(0)
 
   const supabase = createClient()
 
@@ -123,68 +122,11 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
     }
   }
 
-  const handleAddLocation = async () => {
-    if (!newLocation.trim()) {
-      alert("Location name cannot be empty")
-      return
-    }
 
-    try {
-      const { data, error } = await supabase.from("locations").insert({ name: newLocation.trim() }).select().single()
 
-      if (error) {
-        if (error.code === "23505") {
-          // Unique constraint violation
-          alert("This location already exists")
-          return
-        }
-        throw error
-      }
 
-      await loadLocations()
-      setNewLocation("")
-    } catch (error) {
-      console.error("Error adding location:", error)
-      alert("Failed to add location. Please try again.")
-    }
-  }
 
-  const handleUpdateLocation = async (id: string, newName: string) => {
-    if (!newName.trim()) {
-      alert("Location name cannot be empty")
-      return
-    }
 
-    try {
-      const { error } = await supabase.from("locations").update({ name: newName.trim() }).eq("id", id)
-
-      if (error) throw error
-
-      await loadLocations()
-      setEditingLocationId(null)
-      setEditingLocationName("")
-    } catch (error) {
-      console.error("Error updating location:", error)
-      alert("Failed to update location. Please try again.")
-    }
-  }
-
-  const handleDeleteLocation = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this location?")) {
-      return
-    }
-
-    try {
-      const { error } = await supabase.from("locations").delete().eq("id", id)
-
-      if (error) throw error
-
-      await loadLocations()
-    } catch (error) {
-      console.error("Error deleting location:", error)
-      alert("Failed to delete location. Please try again.")
-    }
-  }
 
   const handleAddDivision = async () => {
     if (!newDivisionName.trim()) {
@@ -368,6 +310,75 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
     }
   }
 
+  const handleBackfillFolderIds = async () => {
+    setIsBackfilling(true)
+    setBackfillUpdatedCount(0)
+    setBackfillTotal(0)
+
+    try {
+      const { data: folders, error: foldersError } = await supabase
+        .from("folders")
+        .select("id, full_path")
+        .order("full_path", { ascending: false })
+      if (foldersError) throw foldersError
+
+      const folderRefs: FolderReference[] = (folders || []).map((f: any) => ({
+        id: f.id,
+        full_path: f.full_path,
+        normalizedPath: normalizeDrivePath(f.full_path),
+      }))
+
+      const { count, error: countError } = await supabase
+        .from("documents")
+        .select("*", { count: "exact", head: true })
+        .is("folder_id", null)
+        .not("path", "is", null)
+      if (countError) throw countError
+      setBackfillTotal(count || 0)
+
+      const chunkSize = 1000
+      let offset = 0
+
+      while (true) {
+        const { data: docs, error: docsError } = await supabase
+          .from("documents")
+          .select("id, path")
+          .is("folder_id", null)
+          .not("path", "is", null)
+          .order("id", { ascending: true })
+          .range(offset, offset + chunkSize - 1)
+
+        if (docsError) throw docsError
+        if (!docs || docs.length === 0) break
+
+        for (const doc of docs) {
+          const match = bestFolderMatch(doc.path, folderRefs)
+
+          if (match) {
+            const { error: updateError } = await supabase
+              .from("documents")
+              .update({ folder_id: match.id })
+              .eq("id", doc.id)
+            if (updateError) {
+              console.error("[v0] Backfill update error", updateError)
+              continue
+            }
+            setBackfillUpdatedCount((c) => c + 1)
+          }
+        }
+
+        offset += chunkSize
+      }
+
+      alert("Backfill completed.")
+    } catch (err: any) {
+      console.error("Error backfilling folder_id:", err)
+      alert(`Backfill failed: ${err.message || "Unknown error"}`)
+    } finally {
+      setIsBackfilling(false)
+    }
+  }
+
   const loadDivisions = async () => {
     try {
       const { data, error } = await supabase
@@ -403,68 +414,29 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
     }
   }
 
-  const loadLocations = async () => {
-    try {
-      const { data, error } = await supabase.from("locations").select("id, name").order("name")
 
-      if (error) throw error
-
-      setLocations(data || [])
-    } catch (error) {
-      console.error("Error loading locations:", error)
-    }
-  }
 
   useEffect(() => {
     loadDivisions()
     loadDocumentCount()
-    loadLocations() // Added to load locations from database on mount
   }, [])
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold mb-2">Admin Settings</h1>
-        <p className="text-muted-foreground">Manage document types, locations, divisions, and departments</p>
+        <p className="text-muted-foreground">Manage document types, divisions, and departments</p>
       </div>
 
-      <Card className="border-red-500 border-2">
-        <CardHeader>
-          <CardTitle className="text-red-600">Danger Zone</CardTitle>
-          <p className="text-sm text-muted-foreground">Irreversible actions that will permanently delete data</p>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between p-4 bg-red-50 rounded-lg border border-red-200">
-            <div>
-              <h3 className="font-semibold text-red-900">Delete All Imported Documents</h3>
-              <p className="text-sm text-red-700">
-                Permanently delete all {documentCount.toLocaleString()} imported documents from the database. Your admin
-                settings (document types, locations, divisions, departments) will NOT be affected.
-              </p>
-            </div>
-            <Button
-              variant="destructive"
-              onClick={handleDeleteAllDocuments}
-              disabled={isDeleting || documentCount === 0}
-              className="gap-2"
-            >
-              <Trash2 className="h-4 w-4" />
-              {isDeleting ? "Deleting..." : "Delete All Imported Documents"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+
 
       <Tabs defaultValue="document-types" className="w-full">
-        <TabsList className="grid w-full max-w-2xl grid-cols-3">
+        <TabsList className="grid w-full max-w-2xl grid-cols-2">
           <TabsTrigger value="document-types" className="gap-2">
             <FileText className="h-4 w-4" />
             Document Types
           </TabsTrigger>
-          <TabsTrigger value="locations" className="gap-2">
-            <MapPin className="h-4 w-4" />
-            Locations
-          </TabsTrigger>
+
           <TabsTrigger value="organization" className="gap-2">
             <FolderTree className="h-4 w-4" />
             Organization
@@ -575,109 +547,7 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
           </Card>
         </TabsContent>
 
-        <TabsContent value="locations" className="mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Locations</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Manage where documents are stored (Google Drive, Email, etc.)
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex gap-2">
-                <Input
-                  placeholder="New location name..."
-                  value={newLocation}
-                  onChange={(e) => setNewLocation(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      handleAddLocation()
-                    }
-                  }}
-                />
-                <Button onClick={handleAddLocation} className="gap-2">
-                  <Plus className="h-4 w-4" />
-                  Add
-                </Button>
-              </div>
 
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead className="w-[100px]">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {locations.map((location) => (
-                    <TableRow key={location.id}>
-                      <TableCell>
-                        {editingLocationId === location.id ? (
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={editingLocationName}
-                              onChange={(e) => setEditingLocationName(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  handleUpdateLocation(location.id, editingLocationName)
-                                } else if (e.key === "Escape") {
-                                  setEditingLocationId(null)
-                                  setEditingLocationName("")
-                                }
-                              }}
-                              autoFocus
-                            />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => handleUpdateLocation(location.id, editingLocationName)}
-                            >
-                              <Check className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => {
-                                setEditingLocationId(null)
-                                setEditingLocationName("")
-                              }}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ) : (
-                          <span>{location.name}</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => {
-                              setEditingLocationId(location.id)
-                              setEditingLocationName(location.name)
-                            }}
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => handleDeleteLocation(location.id)}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </TabsContent>
 
         <TabsContent value="organization" className="mt-6">
           <div className="grid gap-6 lg:grid-cols-2">
@@ -912,6 +782,58 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
           </div>
         </TabsContent>
       </Tabs>
+
+      <Card className="border-red-500 border-2">
+        <CardHeader>
+          <CardTitle className="text-red-600">Danger Zone</CardTitle>
+          <p className="text-sm text-muted-foreground">Irreversible actions that will permanently delete data</p>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between p-4 bg-red-50 rounded-lg border border-red-200">
+            <div>
+              <h3 className="font-semibold text-red-900">Delete All Imported Documents</h3>
+              <p className="text-sm text-red-700">
+                Permanently delete all {documentCount.toLocaleString()} imported documents from the database. Your admin
+                settings (document types, divisions, departments) will NOT be affected.
+              </p>
+            </div>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteAllDocuments}
+              disabled={isDeleting || documentCount === 0}
+              className="gap-2"
+            >
+              <Trash2 className="h-4 w-4" />
+              {isDeleting ? "Deleting..." : "Delete All Imported Documents"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Utilities</CardTitle>
+          <p className="text-sm text-muted-foreground">Maintenance helpers for document metadata</p>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between p-4 bg-amber-50 rounded-lg border border-amber-200">
+            <div>
+              <h3 className="font-semibold text-amber-900">Backfill folder_id from document paths</h3>
+              <p className="text-sm text-amber-700">Assign folders by matching path prefix to folder full_path.</p>
+            </div>
+            <Button onClick={handleBackfillFolderIds} disabled={isBackfilling} className="gap-2">
+              <FolderTree className="h-4 w-4" />
+              {isBackfilling ? "Backfilling..." : "Run Backfill"}
+            </Button>
+          </div>
+          {(isBackfilling || backfillUpdatedCount > 0) && (
+            <div className="mt-3 text-sm text-muted-foreground">
+              <span className="font-mono">{backfillUpdatedCount} / {backfillTotal} updated</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
     </div>
   )
 }

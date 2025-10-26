@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head><title>CSV Parser Test</title></head>
+<body>
+<h2>CSV Parser Test</h2>
+<textarea id="csv" rows="15" cols="100">Document Name,Location,Path
+test1.pdf,ea3bd0c5-b7cf-42be-9dfa-7002d75fc8cd,test1.pdf
+desktop.ini,ea3bd0c5-b7cf-42be-9dfa-7002d75fc8cd,00_LRH Photos\desktop.ini
+test3.pdf,ea3bd0c5-b7cf-42be-9dfa-7002d75fc8cd,"Books\test3.pdf"
+test4.pdf,ea3bd0c5-b7cf-42be-9dfa-7002d75fc8cd,"Board Technical Bulletins, Bulletins and Policy Letters\test4.pdf"</textarea>
+<br><br>
+<button onclick="testParse()" style="padding: 10px 20px; font-size: 16px;">TEST PARSE</button>
+<br><br>
+<pre id="output" style="background: #f0f0f0; padding: 20px; border: 1px solid #ccc;"></pre>
+
+<script>
+function testParse() {
+  const csvContent = document.getElementById('csv').value;
+  const lines = csvContent.split('\n').map(line => line.trim()).filter(line => line);
+  const dataLines = lines.slice(1);
+  
+  let results = [];
+  
+  for (let i = 0; i < dataLines.length; i++) {
+    const line = dataLines[i];
+    
+    // EXACT CSV parser from bulk-import-form.tsx
+    const parts = [];
+    let current = "";
+    let inQuotes = false;
+    
+    for (let j = 0; j < line.length; j++) {
+      const char = line[j];
+      
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        parts.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    parts.push(current.trim());
+    
+    const documentName = parts[0]?.replace(/^["']|["']$/g, "");
+    const location = parts[1]?.replace(/^["']|["']$/g, "");
+    const path = parts.length >= 3 ? parts[2]?.replace(/^["']|["']$/g, "") : null;
+    
+    results.push({
+      line_num: i + 1,
+      raw_line: line,
+      parts_count: parts.length,
+      title: documentName,
+      location: location.substring(0, 20) + '...',
+      path: path,
+      HAS_FOLDER: path && path.includes('\\') ? 'YES ✓' : 'NO ✗'
+    });
+  }
+  
+  document.getElementById('output').textContent = JSON.stringify(results, null, 2);
+}
+</script>
+</body>
+</html>
+

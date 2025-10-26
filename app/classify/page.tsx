@@ -57,6 +57,15 @@ export default async function ClassifyPage() {
     console.error("[v0] Error fetching folders:", foldersError)
   }
 
+  const { count: unassignedCount, error: unassignedError } = await supabase
+    .from("documents")
+    .select("id", { count: "exact", head: true })
+    .is("folder_id", null)
+
+  if (unassignedError) {
+    console.error("[v0] Error fetching unassigned document count:", unassignedError)
+  }
+
   // Build the hierarchical structure manually
   const organizationalStructure = (executiveDirectors || []).map((ed) => ({
     ...ed,
@@ -93,6 +102,20 @@ export default async function ClassifyPage() {
     }
   })
 
+  const UNASSIGNED_FOLDER_ID = "__UNASSIGNED__"
+  folderDocumentCounts[UNASSIGNED_FOLDER_ID] = unassignedCount || 0
+
+  const allFolders = [
+    {
+      id: UNASSIGNED_FOLDER_ID,
+      name: "Unassigned",
+      full_path: "Unassigned",
+      level: 0,
+      parent_id: null,
+    },
+    ...processedFolders,
+  ]
+
   return (
     <>
       <Navigation />
@@ -106,7 +129,7 @@ export default async function ClassifyPage() {
           </div>
           <ClassificationInterface
             organizationalStructure={organizationalStructure}
-            folders={processedFolders}
+            folders={allFolders}
             documentCounts={folderDocumentCounts}
           />
         </div>

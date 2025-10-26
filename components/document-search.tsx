@@ -37,6 +37,10 @@ export function DocumentSearch() {
   const [documents, setDocuments] = useState<DocumentWithHierarchy[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [totalResults, setTotalResults] = useState(0)
+  const [isFetchingMore, setIsFetchingMore] = useState(false)
 
   // Load hierarchy data on mount
   useEffect(() => {
@@ -212,11 +216,21 @@ export function DocumentSearch() {
   const handleSearch = async () => {
     setIsLoading(true)
     setHasSearched(true)
+    setCurrentPage(1)
 
     try {
       let query = supabase
         .from("documents")
-        .select("*")
+        .select(
+          `
+          id, title, description, file_type, file_url,
+          divisions!documents_division_id_fkey(name),
+          departments!documents_department_id_fkey(name),
+          secretaries!documents_secretary_id_fkey(name),
+          executive_directors!documents_executive_director_id_fkey(name)
+        `,
+          { count: "exact" },
+        )
         .eq("status", "classified")
         .order("created_at", { ascending: false })
 
@@ -241,40 +255,68 @@ export function DocumentSearch() {
         query = query.eq("department_id", selectedDepartment)
       }
 
-      const { data: docs, error } = await query
+      const { data: docs, error, count } = await query.range(0, pageSize - 1)
 
       if (error) {
         console.error("[v0] Error searching documents:", error)
         throw error
       }
 
-      // Fetch hierarchy names separately
-      const docsWithHierarchy = await Promise.all(
-        (docs || []).map(async (doc) => {
-          const [ed, sec, div, dept] = await Promise.all([
-            doc.executive_director_id
-              ? supabase.from("executive_directors").select("name").eq("id", doc.executive_director_id).single()
-              : null,
-            doc.secretary_id ? supabase.from("secretaries").select("name").eq("id", doc.secretary_id).single() : null,
-            doc.division_id ? supabase.from("divisions").select("name").eq("id", doc.division_id).single() : null,
-            doc.department_id ? supabase.from("departments").select("name").eq("id", doc.department_id).single() : null,
-          ])
-
-          return {
-            ...doc,
-            executive_directors: ed?.data || undefined,
-            secretaries: sec?.data || undefined,
-            divisions: div?.data || undefined,
-            departments: dept?.data || undefined,
-          }
-        }),
-      )
-
-      setDocuments(docsWithHierarchy)
+      setDocuments(docs || [])
+      setTotalResults(count || (docs ? docs.length : 0))
     } catch (error) {
       console.error("[v0] Error in search:", error)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const loadMoreResults = async () => {
+    if (isFetchingMore) return
+    setIsFetchingMore(true)
+
+    try {
+      let query = supabase
+        .from("documents")
+        .select(
+          `
+          id, title, description, file_type, file_url,
+          divisions!documents_division_id_fkey(name),
+          departments!documents_department_id_fkey(name),
+          secretaries!documents_secretary_id_fkey(name),
+          executive_directors!documents_executive_director_id_fkey(name)
+        `,
+        )
+        .eq("status", "classified")
+        .order("created_at", { ascending: false })
+
+      if (searchQuery) {
+        query = query.or(`title.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`)
+      }
+      if (selectedExecutiveDirector && selectedExecutiveDirector !== "all") {
+        query = query.eq("executive_director_id", selectedExecutiveDirector)
+      }
+      if (selectedSecretary && selectedSecretary !== "all") {
+        query = query.eq("secretary_id", selectedSecretary)
+      }
+      if (selectedDivision && selectedDivision !== "all") {
+        query = query.eq("division_id", selectedDivision)
+      }
+      if (selectedDepartment && selectedDepartment !== "all") {
+        query = query.eq("department_id", selectedDepartment)
+      }
+
+      const start = currentPage * pageSize
+      const end = start + pageSize - 1
+      const { data: docs, error } = await query.range(start, end)
+      if (error) throw error
+
+      setDocuments((prev) => [...prev, ...(docs || [])])
+      setCurrentPage((p) => p + 1)
+    } catch (error) {
+      console.error("[v0] Error loading more results:", error)
+    } finally {
+      setIsFetchingMore(false)
     }
   }
 
@@ -286,6 +328,8 @@ export function DocumentSearch() {
     setSelectedDepartment("all")
     setDocuments([])
     setHasSearched(false)
+    setCurrentPage(1)
+    setTotalResults(0)
   }
 
   return (
@@ -403,7 +447,7 @@ export function DocumentSearch() {
           <CardHeader>
             <CardTitle>Search Results</CardTitle>
             <CardDescription>
-              {documents.length} {documents.length === 1 ? "document" : "documents"} found
+              Showing {documents.length} of {totalResults} results
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -454,6 +498,13 @@ export function DocumentSearch() {
                     </CardContent>
                   </Card>
                 ))}
+                {documents.length < totalResults && (
+                  <div className="flex justify-center mt-4">
+                    <Button onClick={loadMoreResults} disabled={isFetchingMore} variant="secondary">
+                      {isFetchingMore ? "Loading..." : "Load More"}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

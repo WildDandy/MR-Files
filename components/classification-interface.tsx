@@ -81,6 +81,8 @@ type DocumentType = {
   name: string
 }
 
+const UNASSIGNED_FOLDER_ID = "__UNASSIGNED__"
+
 export function ClassificationInterface({
   documents = [],
   organizationalStructure,
@@ -180,7 +182,8 @@ export function ClassificationInterface({
       let query = supabase
         .from("documents")
         .select("*", { count: "exact" })
-        .eq("status", "unclassified")
+        .or("status.eq.unclassified,status.is.null")
+        .is("access_level", null)
         .order("created_at", { ascending: false })
 
       // Apply search filter on server
@@ -188,9 +191,17 @@ export function ClassificationInterface({
         query = query.ilike("title", `%${searchQuery.trim()}%`)
       }
 
-      // Apply folder filter: use folder_id index for efficient filtering
-      if (selectedFolderIds.length > 0) {
-        query = query.in("folder_id", selectedFolderIds)
+      // Apply folder filter: handle real folders and virtual unassigned bucket
+      const realFolderSelections = selectedFolderIds.filter((id) => id !== UNASSIGNED_FOLDER_ID)
+      const includeUnassigned = selectedFolderIds.includes(UNASSIGNED_FOLDER_ID)
+
+      if (realFolderSelections.length > 0 && includeUnassigned) {
+        const formattedIds = realFolderSelections.map((id) => `"${id}"`).join(",")
+        query = query.or(`folder_id.in.(${formattedIds}),folder_id.is.null`)
+      } else if (realFolderSelections.length > 0) {
+        query = query.in("folder_id", realFolderSelections)
+      } else if (includeUnassigned) {
+        query = query.is("folder_id", null)
       }
 
       // Get total count
@@ -229,12 +240,25 @@ export function ClassificationInterface({
         `,
           { count: "exact" },
         )
-        .eq("status", "classified")
+        .or("status.eq.classified,access_level.not.is.null")
         .order("created_at", { ascending: false })
 
       // Apply search filter on server
       if (searchQuery.trim()) {
         query = query.ilike("title", `%${searchQuery.trim()}%`)
+      }
+
+      // Apply folder filter when folders are selected
+      const realFolderSelections = selectedFolderIds.filter((id) => id !== UNASSIGNED_FOLDER_ID)
+      const includeUnassigned = selectedFolderIds.includes(UNASSIGNED_FOLDER_ID)
+
+      if (realFolderSelections.length > 0 && includeUnassigned) {
+        const formattedIds = realFolderSelections.map((id) => `"${id}"`).join(",")
+        query = query.or(`folder_id.in.(${formattedIds}),folder_id.is.null`)
+      } else if (realFolderSelections.length > 0) {
+        query = query.in("folder_id", realFolderSelections)
+      } else if (includeUnassigned) {
+        query = query.is("folder_id", null)
       }
 
       // Get total count
@@ -1062,7 +1086,7 @@ export function ClassificationInterface({
     }
   }
 
-  const filteredUnclassifiedDocs = unclassifiedDocs.filter((doc) => !doc.priority || doc.priority === "")
+  const filteredUnclassifiedDocs = unclassifiedDocs // Show ALL unclassified documents (with or without priority)
   const filteredRedDocs = unclassifiedDocs.filter((doc) => doc.priority === "red")
   const filteredYellowDocs = unclassifiedDocs.filter((doc) => doc.priority === "yellow")
   const filteredGreenDocs = unclassifiedDocs.filter((doc) => doc.priority === "green")
@@ -1745,6 +1769,8 @@ export function ClassificationInterface({
     alert("Export Classified - Feature not yet implemented")
   }
 
+  const hasRealFolders = folders.some((folder) => folder.id !== UNASSIGNED_FOLDER_ID)
+
   return (
     <div className="space-y-6">
       <Card>
@@ -1763,21 +1789,21 @@ export function ClassificationInterface({
                 className="pl-10"
               />
             </div>
-            {folders.length > 0 && (
-              <Button
-                variant="outline"
-                onClick={() => setIsFolderDrawerOpen(true)}
-                className="border border-black flex-shrink-0"
-              >
-                <Filter className="h-4 w-4 mr-2" />
-                Filter by Folder
-                {selectedFolderIds.length > 0 && (
-                  <Badge variant="secondary" className="ml-2">
-                    {selectedFolderIds.length}
-                  </Badge>
-                )}
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              onClick={() => setIsFolderDrawerOpen(true)}
+              className="border border-black flex-shrink-0"
+              disabled={!hasRealFolders}
+              title={!hasRealFolders ? "No folders available - run migrations 017-023" : ""}
+            >
+              <Filter className="h-4 w-4 mr-2" />
+              Filter by Folder
+              {selectedFolderIds.length > 0 && (
+                <Badge variant="secondary" className="ml-2">
+                  {selectedFolderIds.length}
+                </Badge>
+              )}
+            </Button>
           </div>
           {selectedFolderIds.length > 0 && (
             <div className="mt-3 flex items-center gap-2">
@@ -2471,7 +2497,7 @@ export function ClassificationInterface({
         folders={folders}
         selectedFolderIds={selectedFolderIds}
         onApplyFilters={(folderIds) => {
-          setSelectedFolderIds(folderIds)
+          setSelectedFolderIds(Array.from(new Set(folderIds)))
           setCurrentPage(1)
         }}
         documentCounts={documentCounts}

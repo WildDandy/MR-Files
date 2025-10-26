@@ -1,0 +1,290 @@
+# Debug CSV Import Path Issue
+
+## Current Problem
+
+- **Expected:** Path column should contain folder structure (e.g., `Books\file.pdf`)
+- **Actual:** Path column equals Document Name (e.g., `file.pdf`)
+- **Impact:** 31,221 documents imported, 0 have folder paths
+
+## Diagnostic Plan - Check Each Layer
+
+### Layer 1: Source CSV File Verification
+
+**Check if CSV actually contains folder paths:**
+
+Run in terminal:
+
+```powershell
+Get-Content "temp\google_drive_documents.csv" | Select-String "\\" | Select-Object -First 10
+```
+
+**Expected:** Should show lines with backslashes (folder paths)
+
+**Scenarios:**
+
+- A) ✅ CSV has folder paths → Problem is in import code
+- B) ❌ CSV has no folder paths → Need to regenerate CSV
+
+---
+
+### Layer 2: CSV File Format Verification
+
+**Check CSV encoding and line endings:**
+
+```powershell
+# Check file size
+(Get-Item "temp\google_drive_documents.csv").Length
+
+# Check encoding
+Get-Content "temp\google_drive_documents.csv" -Encoding UTF8 | Measure-Object -Line
+
+# Show line 22 (first line with folder)
+Get-Content "temp\google_drive_documents.csv" | Select-Object -Index 21
+```
+
+**Expected line 22:**
+
+```
+desktop.ini,ea3bd0c5-b7cf-42be-9dfa-7002d75fc8cd,00_LRH Photos\desktop.ini
+```
+
+**Scenarios:**
+
+- A) Line shows full path → CSV is correct, import code issue
+- B) Line shows only filename → CSV generation failed
+
+---
+
+### Layer 3: Browser Import Method
+
+**Test both import methods separately:**
+
+**Method A: Paste CSV content**
+
+1. Open CSV in Notepad
+2. Copy lines 1-5
+3. Paste in import textarea
+4. Check console logs
+
+**Method B: Upload CSV file**
+
+1. Use file upload button
+2. Select CSV file
+3. Check console logs
+
+**Scenarios:**
+
+- A) Both fail → Import code issue
+- B) Only one fails → Method-specific issue
+- C) Both work but database wrong → Database issue
+
+---
+
+### Layer 4: Import Code Execution
+
+**Add temporary test logging:**
+
+Create test file `temp/test_csv_parsing.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<body>
+<textarea id="csv" rows="10" cols="80">
+Document Name,Location,Path
+test1.pdf,ea3bd0c5,test1.pdf
+test2.pdf,ea3bd0c5,"Books\test2.pdf"
+test3.pdf,ea3bd0c5,"Board Technical Bulletins, Bulletins and Policy Letters\test3.pdf"
+</textarea>
+<button onclick="testParse()">Test Parse</button>
+<pre id="output"></pre>
+
+<script>
+function testParse() {
+  const csvContent = document.getElementById('csv').value;
+  const lines = csvContent.split('\n').filter(l => l.trim());
+  const dataLines = lines.slice(1);
+  
+  let results = [];
+  
+  for (let i = 0; i < dataLines.length; i++) {
+    const line = dataLines[i];
+    
+    // CSV parser from our code
+    const parts = [];
+    let current = "";
+    let inQuotes = false;
+    
+    for (let j = 0; j < line.length; j++) {
+      const char = line[j];
+      
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        parts.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    parts.push(current.trim());
+    
+    results.push({
+      line: i + 1,
+      original: line,
+      parsed_parts: parts.length,
+      title: parts[0]?.replace(/^["']|["']$/g, ""),
+      location: parts[1]?.replace(/^["']|["']$/g, ""),
+      path: parts.length >= 3 ? parts[2]?.replace(/^["']|["']$/g, "") : null
+    });
+  }
+  
+  document.getElementById('output').textContent = JSON.stringify(results, null, 2);
+}
+</script>
+</body>
+</html>
+```
+
+**Test this independently** to verify CSV parser logic works
+
+---
+
+### Layer 5: Database Schema Check
+
+**Verify path column exists and is correct type:**
+
+```sql
+SELECT 
+  column_name, 
+  data_type, 
+  character_maximum_length
+FROM information_schema.columns 
+WHERE table_name = 'documents' 
+AND column_name = 'path';
+```
+
+**Expected:** `path | text | NULL`
+
+---
+
+### Layer 6: Supabase Insert Verification
+
+**Check what's actually being sent to Supabase:**
+
+Add console logging in import code before insert:
+
+```javascript
+console.log('[DEBUG] First document to insert:', JSON.stringify(documents[0], null, 2));
+console.log('[DEBUG] Last document to insert:', JSON.stringify(documents[documents.length - 1], null, 2));
+```
+
+**Check if documents array has correct path values BEFORE sending to Supabase**
+
+---
+
+### Layer 7: Network Request Inspection
+
+**Use Browser DevTools to inspect actual API calls:**
+
+1. Open DevTools → Network tab
+2. Filter: "Fetch/XHR"
+3. Import 3 documents
+4. Find POST request to Supabase
+5. Check "Payload" tab
+6. Verify path field in JSON payload
+
+**Scenarios:**
+
+- A) Payload has correct paths → Supabase/database issue
+- B) Payload has wrong paths → Import code issue
+- C) Payload missing path → Code not including path
+
+---
+
+## Root Cause Scenarios
+
+### Scenario A: CSV File is Corrupt/Wrong
+
+**Symptoms:** CSV shows path = filename throughout
+
+**Fix:** Regenerate CSV using `crawl_google_drive.py`
+
+### Scenario B: Import Code Not Reading Path Column
+
+**Symptoms:** Code parses only 2 columns instead of 3
+
+**Fix:** Update CSV parser to handle 3rd column
+
+### Scenario C: Import Code Reading Wrong Column
+
+**Symptoms:** Parsing works but maps wrong column to path
+
+**Fix:** Verify column mapping (parts[2] should be path)
+
+### Scenario D: Supabase Rejecting Path Values
+
+**Symptoms:** Payload correct but database has wrong values
+
+**Fix:** Check RLS policies, column constraints
+
+### Scenario E: Browser Caching Old Import Code
+
+**Symptoms:** Debug logs don't appear
+
+**Fix:** Hard refresh, clear cache, check Network tab for JS bundle
+
+### Scenario F: CSV Has Wrong Line Endings
+
+**Symptoms:** All data in one line or parsing fails
+
+**Fix:** Convert to proper line endings (CRLF or LF)
+
+---
+
+## Execution Order
+
+### FIRST: Try the Quick Fix (Recommended)
+
+**Option A: Regenerate CSV from Google Drive** - 5 min
+
+- Run `temp/crawl_google_drive.py` again
+- Verify new CSV has folder paths
+- Import and test
+
+### THEN: If Still Failing, Debug Systematically
+
+1. **Verify CSV source** (Layer 1) - 2 min
+2. **Check CSV format** (Layer 2) - 2 min  
+3. **Test parser offline** (Layer 4) - 5 min
+4. **Network inspection** (Layer 7) - 3 min
+5. **Database check** (Layer 5) - 1 min
+
+---
+
+## Decision Tree
+
+```
+Does CSV have folder paths?
+├─ NO → Regenerate CSV (Scenario A)
+└─ YES → Is parser extracting them?
+    ├─ NO → Fix parser code (Scenario B/C)
+    └─ YES → Is payload correct?
+        ├─ NO → Fix column mapping (Scenario C)
+        └─ YES → Check database (Scenario D)
+```
+
+---
+
+## Success Criteria
+
+After fix:
+
+```sql
+SELECT 
+  COUNT(*) as total,
+  COUNT(*) FILTER (WHERE path LIKE '%\%') as with_folders
+FROM documents;
+```
+
+**Must show:** with_folders ≈ 23,547 (75% of total)

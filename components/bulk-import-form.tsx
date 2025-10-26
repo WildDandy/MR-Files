@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { createClient } from "@/lib/supabase/client"
 import { Upload, FileText, FileSpreadsheet } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { bestFolderMatch, normalizeDrivePath, type FolderReference } from "@/lib/path-utils"
 
 export function BulkImportForm() {
   const [fileList, setFileList] = useState("")
@@ -21,6 +22,69 @@ export function BulkImportForm() {
   const [selectedFileName, setSelectedFileName] = useState<string>("")
   const router = useRouter()
 
+  const [matchPreview, setMatchPreview] = useState<any | null>(null)
+
+  const previewCsvMatches = async () => {
+    if (!csvContent.trim()) return
+    const supabase = createClient()
+    const lines = csvContent
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line)
+    const dataLines = lines.slice(1)
+
+    const documents: any[] = []
+    for (let i = 0; i < dataLines.length; i++) {
+      const line = dataLines[i]
+      const parts: string[] = []
+      let current = ""
+      let inQuotes = false
+      for (let j = 0; j < line.length; j++) {
+        const char = line[j]
+        if (char === '"') {
+          inQuotes = !inQuotes
+        } else if (char === ',' && !inQuotes) {
+          parts.push(current.trim())
+          current = ""
+        } else {
+          current += char
+        }
+      }
+      parts.push(current.trim())
+      if (parts.length >= 2) {
+        const documentName = parts[0].replace(/^[["']]|[["']]$/g, "")
+        const location = parts[1].replace(/^[["']]|[["']]$/g, "")
+        const path = parts.length >= 3 ? parts[2].replace(/^[["']]|[["']]$/g, "") : null
+        const fileUrl = parts.length >= 4 ? parts[3].replace(/^[["']]|[["']]$/g, "") : ""
+        documents.push({ title: documentName, location, path, file_url: fileUrl })
+      }
+    }
+
+    const { data: folders } = await supabase
+      .from("folders")
+      .select("id, full_path")
+      .order("full_path", { ascending: false })
+    const folderRefs: FolderReference[] = (folders || []).map((f: any) => ({
+      id: f.id,
+      full_path: f.full_path,
+      normalizedPath: normalizeDrivePath(f.full_path),
+    }))
+
+    let matched = 0
+    let unmatched = 0
+    const previewRows = documents.map((doc) => {
+      const match = bestFolderMatch(doc.path, folderRefs)
+      if (match) matched++
+      else unmatched++
+      return {
+        ...doc,
+        matchedFolderId: match?.id || null,
+        matchedFolderPath: match?.full_path || null,
+      }
+    })
+
+    setMatchPreview({ summary: { matched, unmatched }, rows: previewRows })
+  }
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
@@ -69,31 +133,86 @@ export function BulkImportForm() {
 
       for (let i = 0; i < dataLines.length; i++) {
         const line = dataLines[i]
-        const parts = line.split(",").map((part) => part.trim().replace(/^["']|["']$/g, ""))
+        
+        console.log(`[DEBUG] Processing line ${i}: ${line.substring(0, 100)}...`)
+        
+        // Proper CSV parsing that handles quoted fields with commas
+        const parts: string[] = []
+        let current = ""
+        let inQuotes = false
+        
+        for (let j = 0; j < line.length; j++) {
+          const char = line[j]
+          
+          if (char === '"') {
+            inQuotes = !inQuotes
+          } else if (char === ',' && !inQuotes) {
+            parts.push(current.trim())
+            current = ""
+          } else {
+            current += char
+          }
+        }
+        parts.push(current.trim()) // Add last part
+        
+        console.log(`[DEBUG] Parsed into ${parts.length} parts:`, parts.map(p => p.substring(0, 50)))
+        
+        // Log first few documents in detail
+        if (i < 5) {
+          console.log(`[DEBUG LINE ${i}] Full parts:`, parts)
+        }
 
         if (parts.length >= 2) {
-          const documentName = parts[0]
-          const location = parts[1]
+          const documentName = parts[0].replace(/^["']|["']$/g, "")
+          const location = parts[1].replace(/^["']|["']$/g, "")
+          const path = parts.length >= 3 ? parts[2].replace(/^["']|["']$/g, "") : null
+          const fileUrl = parts.length >= 4 ? parts[3].replace(/^["']|["']$/g, "") : ""
 
           documents.push({
             title: documentName,
             description: null,
-            file_url: null,
+            file_url: fileUrl || "",
             file_type: getFileType(documentName),
             status: "unclassified",
             classified_by: user.id,
             group_name: null,
             location: location,
+            path: path,
           })
+        } else {
+          console.warn(`[WARNING] Line ${i} has only ${parts.length} parts, skipping:`, line.substring(0, 100))
         }
       }
 
       console.log("[v0] Total documents to import:", documents.length)
+      
+      // Log first and last document to verify structure
+      if (documents.length > 0) {
+        console.log("[DEBUG] First document:", JSON.stringify(documents[0], null, 2))
+        console.log("[DEBUG] Last document:", JSON.stringify(documents[documents.length - 1], null, 2))
+      }
 
       if (documents.length === 0) {
-        alert("No valid documents found in CSV. Please check the format:\nDocument Name,Location")
+        alert("No valid documents found in CSV. Please check the format:\nDocument Name,Location,Path (optional)")
         setIsLoading(false)
         return
+      }
+
+      // Try to assign folder_id for each document using path prefix matching
+      const { data: folders } = await supabase
+        .from("folders")
+        .select("id, full_path")
+        .order("full_path", { ascending: false })
+      const folderRefs: FolderReference[] = (folders || []).map((f: any) => ({
+        id: f.id,
+        full_path: f.full_path,
+        normalizedPath: normalizeDrivePath(f.full_path),
+      }))
+      for (const doc of documents) {
+        const match = bestFolderMatch(doc.path, folderRefs)
+        if (match) {
+          doc.folder_id = match.id
+        }
       }
 
       setTotalToImport(documents.length)
@@ -247,7 +366,7 @@ export function BulkImportForm() {
           <Upload className="h-5 w-5" />
           Bulk Import Documents
         </CardTitle>
-        <CardDescription>Import documents from a file list or CSV with document names and locations</CardDescription>
+        <CardDescription>Import documents from a file list or CSV with document names, locations, and optional paths</CardDescription>
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="list" className="w-full">
@@ -286,7 +405,7 @@ export function BulkImportForm() {
 
           <TabsContent value="csv" className="flex flex-col gap-4 mt-4">
             <div className="text-sm text-muted-foreground mb-2">
-              CSV format: Document Name, Location (with header row)
+              CSV format: Document Name, Location, Path (optional) — with header row
             </div>
             <div className="flex flex-col gap-4">
               <div className="flex items-center gap-4">
@@ -305,7 +424,7 @@ export function BulkImportForm() {
               <div className="text-sm text-muted-foreground text-center">or paste CSV content below</div>
 
               <Textarea
-                placeholder="Document Name,Location&#10;OEC Index.doc,Maria's Computer&#10;OEC Subject index.pdf,Google Drive&#10;1979 Scn Materials List.xls,Server Room"
+                placeholder="Document Name,Location,Path\nOEC Index.doc,Maria's Computer,/LRH Directory/Indexes/OEC\nOEC Subject index.pdf,Google Drive,/LRH Directory/Indexes/OEC\n1979 Scn Materials List.xls,Server Room,/LRH Directory/Lists"
                 value={csvContent}
                 onChange={(e) => setCsvContent(e.target.value)}
                 className="min-h-[300px] font-mono text-sm"
@@ -321,10 +440,37 @@ export function BulkImportForm() {
                 </span>
               </div>
 
-              <Button onClick={handleCsvImport} disabled={isLoading || !csvContent.trim()}>
-                {isLoading ? "Importing..." : "Import CSV"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={previewCsvMatches} disabled={!csvContent.trim() || isLoading}>
+                  Preview Folder Matches
+                </Button>
+                <Button onClick={handleCsvImport} disabled={isLoading || !csvContent.trim()}>
+                  {isLoading ? "Importing..." : "Import CSV"}
+                </Button>
+              </div>
             </div>
+
+            {matchPreview && (
+              <div className="mt-4 border rounded-lg p-4 text-sm">
+                <div className="font-medium mb-2">Folder Match Preview</div>
+                <div className="flex gap-6 mb-3">
+                  <div>Matched: <span className="font-mono">{matchPreview.summary.matched}</span></div>
+                  <div>Unmatched: <span className="font-mono">{matchPreview.summary.unmatched}</span></div>
+                </div>
+                {matchPreview.summary.unmatched > 0 && (
+                  <div>
+                    <div className="text-muted-foreground mb-2">Showing up to 10 unmatched rows:</div>
+                    <ul className="list-disc pl-6">
+                      {matchPreview.rows.filter((r: any) => !r.matchedFolderId).slice(0, 10).map((r: any, idx: number) => (
+                        <li key={idx}>
+                        <span className="font-mono">{r.title}</span> — <span className="font-mono">{normalizeDrivePath(r.path)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </TabsContent>
         </Tabs>
 
