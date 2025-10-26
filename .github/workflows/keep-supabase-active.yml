@@ -1,0 +1,76 @@
+name: Keep Supabase Active
+
+# Run every 5 days to prevent the 7-day inactivity pause
+on:
+  schedule:
+    # Runs at 3:00 AM UTC every 5 days
+    - cron: '0 3 */5 * *'
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Keep Supabase Active
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          # Simple health check using curl
+          echo "Pinging Supabase project..."
+          
+          # Make a simple query to keep the database active
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "apikey: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${NEXT_PUBLIC_SUPABASE_ANON_KEY}" \
+            -H "Content-Type: application/json" \
+            "${NEXT_PUBLIC_SUPABASE_URL}/rest/v1/rpc/version" \
+            -d '{}')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+          
+          echo "Response code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 404 ]; then
+            echo "✅ Supabase project is active!"
+            exit 0
+          else
+            echo "⚠️ Unexpected response, but connection was made to keep project active"
+            exit 0
+          fi
+
+      - name: Alternative Health Check
+        if: failure()
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          echo "Trying alternative health check..."
+          
+          # Simple GET request to the REST API
+          curl -s \
+            -H "apikey: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${NEXT_PUBLIC_SUPABASE_ANON_KEY}" \
+            "${NEXT_PUBLIC_SUPABASE_URL}/rest/v1/" || true
+          
+          echo "✅ Health check completed"
+
+      - name: Report Status
+        if: always()
+        run: |
+          echo "================================"
+          echo "Keep-alive job completed at $(date)"
+          echo "Next run will be in approximately 5 days"
+          echo "================================"
+
