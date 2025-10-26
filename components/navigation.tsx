@@ -2,9 +2,15 @@
 
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { LogOut, Upload, Tags, Settings } from "lucide-react"
+import { LogOut, Upload, Tags, Settings, HelpCircle, ChevronDown } from "lucide-react"
 
 export function Navigation() {
   const router = useRouter()
@@ -43,6 +49,35 @@ export function Navigation() {
                   Admin
                 </Link>
               </Button>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/tutorial">
+                  <HelpCircle className="h-4 w-4 mr-2" />
+                  Tutorial
+                </Link>
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm">
+                    <Settings className="h-4 w-4 mr-2" />
+                    Definições
+                    <ChevronDown className="h-3 w-3 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem asChild>
+                    <Link href="/definicoes/complexidade">Complexidade</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/definicoes/feriados">Feriados</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/definicoes/armazens">Armazéns</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/definicoes/transportadores">Transportadores</Link>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={handleSignOut}>
