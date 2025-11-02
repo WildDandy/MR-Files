@@ -8,6 +8,13 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { createClient } from "@/lib/supabase/client"
 import {
   FileText,
@@ -103,6 +110,16 @@ export function ClassificationInterface({
   const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([])
   const [isFolderDrawerOpen, setIsFolderDrawerOpen] = useState(false)
 
+  // Additional filters state
+  const [filterPriority, setFilterPriority] = useState<string | null>(null)
+  const [filterAccess, setFilterAccess] = useState<string | null>(null)
+  const [filterDivision, setFilterDivision] = useState<string | null>(null)
+  const [filterDepartment, setFilterDepartment] = useState<string | null>(null)
+  
+  // Classification counts
+  const [totalClassifiedCount, setTotalClassifiedCount] = useState(0)
+  const [totalUnclassifiedCount, setTotalUnclassifiedCount] = useState(0)
+
   const [documentTypes, setDocumentTypes] = useState<DocumentType[]>([])
   const [editingDocId, setEditingDocId] = useState<string | null>(null)
   const [editingDocName, setEditingDocName] = useState("")
@@ -141,12 +158,23 @@ export function ClassificationInterface({
 
   const [activeUnclassifiedTab, setActiveUnclassifiedTab] = useState("classify")
 
+  // Bulk classification staging state
+  const [stagedClassification, setStagedClassification] = useState<DocumentClassification>({})
+
   useEffect(() => {
     fetchClassifiedDocuments()
     fetchDocumentTypes()
     fetchDivisionColors()
     fetchUnclassifiedDocuments()
-  }, [currentPage, pageSize, searchQuery, selectedFolderIds])
+    fetchClassificationCounts()
+  }, [currentPage, pageSize, searchQuery, selectedFolderIds, filterPriority, filterAccess, filterDivision, filterDepartment])
+
+  // Clear staged classification when selection changes
+  useEffect(() => {
+    if (selectedUnclassifiedIds.size <= 1) {
+      setStagedClassification({})
+    }
+  }, [selectedUnclassifiedIds.size])
 
   const fetchDivisionColors = async () => {
     const supabase = createClient()
@@ -173,16 +201,39 @@ export function ClassificationInterface({
     }
   }
 
+  const fetchClassificationCounts = async () => {
+    const supabase = createClient()
+    try {
+      // Count classified (has priority OR access_level)
+      const { count: classifiedCount } = await supabase
+        .from("documents")
+        .select("*", { count: "exact", head: true })
+        .or("priority.not.is.null,access_level.not.is.null")
+
+      // Count unclassified (both priority and access_level are null)
+      const { count: unclassifiedCount } = await supabase
+        .from("documents")
+        .select("*", { count: "exact", head: true })
+        .is("priority", null)
+        .is("access_level", null)
+
+      setTotalClassifiedCount(classifiedCount || 0)
+      setTotalUnclassifiedCount(unclassifiedCount || 0)
+    } catch (error) {
+      console.error("Error fetching classification counts:", error)
+    }
+  }
+
   const fetchUnclassifiedDocuments = async () => {
     setLoading(true)
     const supabase = createClient()
 
     try {
-      // Build query with search filter
+      // Build query with search filter - ALWAYS show only unclassified (no priority, no access_level)
       let query = supabase
         .from("documents")
         .select("*", { count: "exact" })
-        .or("status.eq.unclassified,status.is.null")
+        .is("priority", null)
         .is("access_level", null)
         .order("created_at", { ascending: false })
 
@@ -202,6 +253,14 @@ export function ClassificationInterface({
         query = query.in("folder_id", realFolderSelections)
       } else if (includeUnassigned) {
         query = query.is("folder_id", null)
+      }
+
+      // Apply additional filters (division and department)
+      if (filterDivision) {
+        query = query.eq("division_id", filterDivision)
+      }
+      if (filterDepartment) {
+        query = query.eq("department_id", filterDepartment)
       }
 
       // Get total count
@@ -228,7 +287,7 @@ export function ClassificationInterface({
     try {
       console.log("[v0] Fetching classified documents from database...")
 
-      // Build query with search filter
+      // Build query - ALWAYS show only classified (has priority OR access_level)
       let query = supabase
         .from("documents")
         .select(
@@ -240,8 +299,16 @@ export function ClassificationInterface({
         `,
           { count: "exact" },
         )
-        .or("status.eq.classified,access_level.not.is.null")
+        .or("priority.not.is.null,access_level.not.is.null")
         .order("created_at", { ascending: false })
+
+      // Apply priority and access filters if set
+      if (filterPriority) {
+        query = query.eq("priority", filterPriority)
+      }
+      if (filterAccess) {
+        query = query.eq("access_level", filterAccess)
+      }
 
       // Apply search filter on server
       if (searchQuery.trim()) {
@@ -259,6 +326,14 @@ export function ClassificationInterface({
         query = query.in("folder_id", realFolderSelections)
       } else if (includeUnassigned) {
         query = query.is("folder_id", null)
+      }
+
+      // Apply additional filters (division and department)
+      if (filterDivision) {
+        query = query.eq("division_id", filterDivision)
+      }
+      if (filterDepartment) {
+        query = query.eq("department_id", filterDepartment)
       }
 
       // Get total count
@@ -298,11 +373,50 @@ export function ClassificationInterface({
     ),
   )
 
+  const allDepartments = organizationalStructure.flatMap((ed) =>
+    ed.secretaries.flatMap((sec) =>
+      sec.divisions.flatMap((div) =>
+        div.departments.map((dept) => ({
+          ...dept,
+          divisionId: div.id,
+          divisionName: div.name,
+          secretaryId: sec.id,
+          executiveDirectorId: ed.id,
+        })),
+      ),
+    ),
+  )
+
+  // Get departments filtered by selected division
+  const filteredDepartments = filterDivision
+    ? allDepartments.filter((dept) => dept.divisionId === filterDivision)
+    : allDepartments
+
   const handleDocumentClick = (docId: string) => {
     setSelectedDocId(docId)
   }
 
+  // Check if we're in bulk mode
+  const isBulkMode = selectedUnclassifiedIds.size > 1
+
   const handleAccessLevelSelect = (accessLevel: string) => {
+    // In bulk mode, just stage the access level without applying
+    if (isBulkMode) {
+      setStagedClassification((prev) => ({
+        ...prev,
+        access_level: accessLevel,
+        divisionId: undefined,
+        divisionName: undefined,
+        divisionColor: undefined,
+        secretaryId: undefined,
+        executiveDirectorId: undefined,
+        departmentId: undefined,
+        departmentName: undefined,
+      }))
+      return
+    }
+
+    // Single document mode
     if (!selectedDocId) {
       alert("Please select a document first")
       return
@@ -329,6 +443,23 @@ export function ClassificationInterface({
     secretaryId: string,
     executiveDirectorId: string,
   ) => {
+    // In bulk mode, just stage the division without applying
+    if (isBulkMode) {
+      const divisionColor = divisionColorsMap[divisionName] || "#CACECF"
+      setStagedClassification((prev) => ({
+        ...prev,
+        divisionId,
+        divisionName,
+        divisionColor,
+        secretaryId,
+        executiveDirectorId,
+        departmentId: undefined,
+        departmentName: undefined,
+      }))
+      return
+    }
+
+    // Single document mode
     if (!selectedDocId) {
       alert("Please select a document first")
       return
@@ -359,6 +490,17 @@ export function ClassificationInterface({
   }
 
   const handleDepartmentSelect = async (departmentId: string, departmentName: string) => {
+    // In bulk mode, just stage the department without applying
+    if (isBulkMode) {
+      setStagedClassification((prev) => ({
+        ...prev,
+        departmentId,
+        departmentName,
+      }))
+      return
+    }
+
+    // Single document mode
     if (!selectedDocId) {
       alert("Please select a document first")
       return
@@ -444,6 +586,115 @@ export function ClassificationInterface({
     }
   }
 
+  const handleBulkClassify = async () => {
+    if (selectedUnclassifiedIds.size === 0) {
+      alert("No documents selected")
+      return
+    }
+
+    // Check if we have at least priority OR full classification (access level, division, department)
+    const hasPriorityOnly = !!stagedClassification.priority && !stagedClassification.access_level
+    const hasFullClassification = !!stagedClassification.access_level && !!stagedClassification.divisionId && !!stagedClassification.departmentId
+
+    if (!hasPriorityOnly && !hasFullClassification) {
+      alert("Please select either priority only, or access level, division, and department before applying")
+      return
+    }
+
+    // Build confirmation message
+    const docCount = selectAllUnclassifiedMode === "all" ? totalUnclassified : selectedUnclassifiedIds.size
+    const summary = [
+      "Classify " + docCount + " documents with:",
+      "",
+    ]
+
+    if (stagedClassification.priority) {
+      summary.push(`Priority: ${stagedClassification.priority.charAt(0).toUpperCase() + stagedClassification.priority.slice(1)}`)
+    }
+    if (stagedClassification.access_level) {
+      summary.push(`Access Level: ${stagedClassification.access_level}`)
+      summary.push(`Division: ${stagedClassification.divisionName}`)
+      summary.push(`Department: ${stagedClassification.departmentName}`)
+    }
+    
+    const confirmationMessage = summary.join("\n")
+    const shouldProceed = confirm(confirmationMessage + "\n\nProceed?")
+
+    if (!shouldProceed) return
+
+    setClassifying(true)
+    setBulkOperationProgress({ current: 0, total: docCount, operation: "Classifying" })
+    const supabase = createClient()
+
+    try {
+      // Get documents to classify based on selection mode
+      let docsToClassify: typeof unclassifiedDocs
+      
+      if (selectAllUnclassifiedMode === "all") {
+        // Fetch all unclassified documents
+        const { data, error } = await supabase
+          .from("documents")
+          .select("*")
+          .or("status.eq.unclassified,status.is.null")
+          .is("access_level", null)
+        if (error) throw error
+        docsToClassify = data || []
+      } else {
+        // Get only selected documents
+        docsToClassify = unclassifiedDocs.filter((doc) => selectedUnclassifiedIds.has(doc.id))
+      }
+
+      console.log("[v0] Bulk classifying documents:", docsToClassify.length)
+
+      let processedCount = 0
+      const isPriorityOnly = !!stagedClassification.priority && !stagedClassification.access_level
+      
+      for (const doc of docsToClassify) {
+        const update: any = {
+          id: doc.id,
+          priority: stagedClassification.priority || doc.priority,
+        }
+
+        // Only update full classification fields if access_level is set
+        if (stagedClassification.access_level) {
+          update.executive_director_id = stagedClassification.executiveDirectorId
+          update.secretary_id = stagedClassification.secretaryId
+          update.division_id = stagedClassification.divisionId
+          update.department_id = stagedClassification.departmentId
+          update.access_level = stagedClassification.access_level
+          update.status = "classified"
+          update.classified_at = new Date().toISOString()
+        }
+
+        const { error } = await supabase.from("documents").update(update).eq("id", doc.id)
+        
+        if (error) {
+          console.error("[v0] Error updating document:", doc.id, error)
+          throw error
+        }
+
+        processedCount++
+        setBulkOperationProgress({ current: processedCount, total: docsToClassify.length, operation: "Classifying" })
+      }
+
+      // Clear selections and staged classification
+      setSelectedUnclassifiedIds(new Set())
+      setStagedClassification({})
+      setSelectedDocId(null)
+
+      console.log("[v0] Bulk classification complete")
+      await fetchClassifiedDocuments()
+      await fetchUnclassifiedDocuments()
+      
+      alert(`Successfully classified ${processedCount} document(s)`)
+    } catch (error) {
+      console.error("Error in bulk classification:", error)
+      alert("Failed to classify documents. Please try again.")
+    } finally {
+      setClassifying(false)
+      setBulkOperationProgress(null)
+    }
+  }
 
   const handleUnclassify = async (docId: string) => {
     const supabase = createClient()
@@ -475,6 +726,116 @@ export function ClassificationInterface({
     } catch (error) {
       console.error("Error unclassifying document:", error)
       alert("Failed to unclassify document. Please try again.")
+    }
+  }
+
+  const handleBulkUnclassify = async () => {
+    if (selectedClassifiedIds.size === 0 && selectAllClassifiedMode !== "all") return
+
+    const unclassifyCount = selectAllClassifiedMode === "all" ? totalClassified : selectedClassifiedIds.size
+    if (!confirm(`Are you sure you want to unclassify ${unclassifyCount} documents?`)) return
+
+    setDeleting(true)
+    setDeleteProgress({ current: 0, total: unclassifyCount })
+    const supabase = createClient()
+
+    try {
+      let idsToUnclassify: string[] = []
+
+      if (selectAllClassifiedMode === "all") {
+        // Fetch all classified document IDs with current filters
+        let query = supabase
+          .from("documents")
+          .select("id")
+          .or("priority.not.is.null,access_level.not.is.null")
+
+        // Apply search filter if active
+        if (searchQuery.trim()) {
+          query = query.ilike("title", `%${searchQuery}%`)
+        }
+
+        // Apply folder filter
+        const realFolderSelections = selectedFolderIds.filter((id) => id !== UNASSIGNED_FOLDER_ID)
+        const includeUnassigned = selectedFolderIds.includes(UNASSIGNED_FOLDER_ID)
+
+        if (realFolderSelections.length > 0 && includeUnassigned) {
+          const formattedIds = realFolderSelections.map((id) => `"${id}"`).join(",")
+          query = query.or(`folder_id.in.(${formattedIds}),folder_id.is.null`)
+        } else if (realFolderSelections.length > 0) {
+          query = query.in("folder_id", realFolderSelections)
+        } else if (includeUnassigned) {
+          query = query.is("folder_id", null)
+        }
+
+        // Apply additional filters
+        if (filterPriority) {
+          query = query.eq("priority", filterPriority)
+        }
+        if (filterAccess) {
+          query = query.eq("access_level", filterAccess)
+        }
+        if (filterDivision) {
+          query = query.eq("division_id", filterDivision)
+        }
+        if (filterDepartment) {
+          query = query.eq("department_id", filterDepartment)
+        }
+
+        query = query.limit(100000)
+
+        const { data, error } = await query
+        if (error) throw error
+        idsToUnclassify = data?.map((d) => d.id) || []
+      } else {
+        idsToUnclassify = Array.from(selectedClassifiedIds)
+      }
+
+      if (idsToUnclassify.length === 0) {
+        alert("No documents to unclassify")
+        setDeleting(false)
+        setDeleteProgress(null)
+        return
+      }
+
+      const batchSize = 500
+      let unclassifiedCount = 0
+
+      for (let i = 0; i < idsToUnclassify.length; i += batchSize) {
+        const batch = idsToUnclassify.slice(i, i + batchSize)
+        const { error } = await supabase
+          .from("documents")
+          .update({
+            executive_director_id: null,
+            secretary_id: null,
+            division_id: null,
+            department_id: null,
+            location: null,
+            access_level: null,
+            priority: null,
+            status: "unclassified",
+            classified_at: null,
+          })
+          .in("id", batch)
+        if (error) throw error
+
+        unclassifiedCount += batch.length
+        setDeleteProgress({ current: unclassifiedCount, total: idsToUnclassify.length })
+        console.log("[v0] Unclassified", unclassifiedCount, "of", idsToUnclassify.length, "documents")
+      }
+
+      console.log("[v0] Successfully unclassified all", unclassifiedCount, "documents")
+      setSelectedClassifiedIds(new Set())
+      setSelectAllClassifiedMode("page")
+      setDeleteProgress(null)
+      await fetchUnclassifiedDocuments()
+      await fetchClassifiedDocuments()
+      await fetchClassificationCounts()
+    } catch (error) {
+      console.error("[v0] Error unclassifying documents:", error)
+      alert("Failed to unclassify documents: " + (error as Error).message)
+    } finally {
+      setDeleting(false)
+      setDeleteProgress(null)
     }
   }
 
@@ -595,6 +956,15 @@ export function ClassificationInterface({
   }
 
   const handlePrioritySelect = async (priority: string) => {
+    // In bulk mode, just stage the priority without applying
+    if (isBulkMode) {
+      // Toggle priority off if already selected
+      const newPriority = stagedClassification.priority === priority ? undefined : priority
+      setStagedClassification((prev) => ({ ...prev, priority: newPriority }))
+      return
+    }
+
+    // Single document mode - apply immediately
     if (!selectedDocId) {
       alert("Please select a document first")
       return
@@ -613,14 +983,9 @@ export function ClassificationInterface({
         prev.map((doc) => (doc.id === selectedDocId ? { ...doc, priority: priority } : doc)),
       )
 
-      // Switch to the correct priority tab
-      if (priority === "red") {
-        setActiveUnclassifiedTab("classify-red")
-      } else if (priority === "yellow") {
-        setActiveUnclassifiedTab("classify-yellow")
-      } else if (priority === "green") {
-        setActiveUnclassifiedTab("classify-green")
-      }
+      // Refresh to remove from unclassified list
+      await fetchUnclassifiedDocuments()
+      await fetchClassifiedDocuments()
     } catch (error) {
       console.error("Error updating priority:", error)
       alert("Failed to update priority. Please try again.")
@@ -912,10 +1277,15 @@ export function ClassificationInterface({
     }
   }
 
-  const selectedDivisionDepartments =
-    selectedDocId && classifications[selectedDocId]?.divisionId
-      ? allDivisions.find((div) => div.id === classifications[selectedDocId].divisionId)?.departments || []
-      : []
+  const selectedDivisionDepartments = (() => {
+    if (isBulkMode && stagedClassification.divisionId) {
+      return allDivisions.find((div) => div.id === stagedClassification.divisionId)?.departments || []
+    }
+    if (selectedDocId && classifications[selectedDocId]?.divisionId) {
+      return allDivisions.find((div) => div.id === classifications[selectedDocId].divisionId)?.departments || []
+    }
+    return []
+  })()
 
   const handleDeleteDocument = async (docId: string, isClassified: boolean) => {
     if (!confirm("Are you sure you want to permanently delete this document?")) {
@@ -1086,10 +1456,7 @@ export function ClassificationInterface({
     }
   }
 
-  const filteredUnclassifiedDocs = unclassifiedDocs // Show ALL unclassified documents (with or without priority)
-  const filteredRedDocs = unclassifiedDocs.filter((doc) => doc.priority === "red")
-  const filteredYellowDocs = unclassifiedDocs.filter((doc) => doc.priority === "yellow")
-  const filteredGreenDocs = unclassifiedDocs.filter((doc) => doc.priority === "green")
+  const filteredUnclassifiedDocs = unclassifiedDocs
   const filteredClassifiedDocs = sortedClassifiedDocs
 
   const renderPaginationControls = (total: number) => {
@@ -1225,7 +1592,7 @@ export function ClassificationInterface({
     )
 
     return (
-      <Card className="h-full flex flex-col">
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1240,18 +1607,9 @@ export function ClassificationInterface({
                   onClick={() => handleBulkDelete(false, tabName)}
                   className="gap-2"
                 >
-                  {bulkOperationProgress ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      {bulkOperationProgress.current}/{bulkOperationProgress.total}
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="h-4 w-4" />
-                      Delete {selectAllUnclassifiedMode === "all" ? totalUnclassified : selectedUnclassifiedIds.size}{" "}
-                      selected
-                    </>
-                  )}
+                  <Trash2 className="h-4 w-4" />
+                  Delete {selectAllUnclassifiedMode === "all" ? totalUnclassified : selectedUnclassifiedIds.size}{" "}
+                  selected
                 </Button>
               )}
               <Badge variant="secondary">{totalUnclassified}</Badge>
@@ -1273,8 +1631,8 @@ export function ClassificationInterface({
             </div>
           )}
         </CardHeader>
-        <CardContent className="p-0 flex-1 overflow-hidden">
-          <div className="overflow-y-auto p-6" style={{ maxHeight: "calc(100vh - 300px)" }}>
+        <CardContent className="p-0">
+          <div className="p-6">
             {loading ? (
               <div className="flex flex-col items-center justify-center text-center p-12">
                 <Loader2 className="h-12 w-12 text-primary animate-spin mb-4" />
@@ -1482,16 +1840,47 @@ export function ClassificationInterface({
       ? unclassifiedDocs.filter((d) => d.group_name === selectedDoc.group_name).length
       : 0
 
+    const docCount = selectAllUnclassifiedMode === "all" ? totalUnclassified : selectedUnclassifiedIds.size
+
     return (
       <div className="w-[25%] flex-shrink-0">
         <div className="space-y-4 sticky top-4">
+          {/* Bulk mode banner */}
+          {isBulkMode && (
+            <Card className="bg-blue-50 border-blue-200">
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <FolderTree className="h-5 w-5 text-blue-600" />
+                    <CardTitle className="text-base text-blue-900">Bulk Classification Mode</CardTitle>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSelectedUnclassifiedIds(new Set())
+                      setSelectAllUnclassifiedMode("page")
+                      setStagedClassification({})
+                    }}
+                    className="h-7 px-2 text-xs text-blue-700 hover:text-blue-900 hover:bg-blue-100"
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Unselect All
+                  </Button>
+                </div>
+                <p className="text-sm text-blue-800">
+                  {docCount} document{docCount !== 1 ? "s" : ""} selected
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <LinkIcon className="h-4 w-4" />
                 Document Path
               </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">Add Google Drive or external link to this document</p>
             </CardHeader>
             <CardContent>
               {!selectedDocId ? (
@@ -1535,12 +1924,9 @@ export function ClassificationInterface({
                 <span className="h-4 w-4 rounded-full bg-gradient-to-r from-red-500 via-yellow-500 to-green-500" />
                 Select Priority
               </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">
-                Click a priority to set it. Click again to remove it.
-              </p>
             </CardHeader>
             <CardContent>
-              {!selectedDocId ? (
+              {!selectedDocId && !isBulkMode ? (
                 <p className="text-sm text-muted-foreground text-center py-4">Select a document to set its priority</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
@@ -1549,9 +1935,11 @@ export function ClassificationInterface({
                     { value: "yellow", label: "Yellow", bg: "#EAB308", text: "#000000" },
                     { value: "green", label: "Green", bg: "#22C55E", text: "#FFFFFF" },
                   ].map((priority) => {
-                    const isSelected =
-                      unclassifiedDocs.find((d) => d.id === selectedDocId)?.priority === priority.value ||
-                      classifications[selectedDocId]?.priority === priority.value
+                    // In bulk mode, check stagedClassification; otherwise check selectedDoc
+                    const isSelected = isBulkMode
+                      ? stagedClassification.priority === priority.value
+                      : unclassifiedDocs.find((d) => d.id === selectedDocId)?.priority === priority.value ||
+                        (selectedDocId && classifications[selectedDocId]?.priority === priority.value)
 
                     return (
                       <button
@@ -1595,12 +1983,14 @@ export function ClassificationInterface({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {!selectedDocId ? (
+              {!selectedDocId && !isBulkMode ? (
                 <p className="text-sm text-muted-foreground text-center py-4">Select a document first</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
                   {["Public", "Sea Org"].map((accessLevel) => {
-                    const isSelected = classifications[selectedDocId]?.access_level === accessLevel
+                    const isSelected = isBulkMode
+                      ? stagedClassification.access_level === accessLevel
+                      : selectedDocId && classifications[selectedDocId]?.access_level === accessLevel
 
                     return (
                       <Button
@@ -1636,7 +2026,7 @@ export function ClassificationInterface({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {!selectedDocId || !classifications[selectedDocId]?.access_level ? (
+              {(!selectedDocId && !isBulkMode) || (!isBulkMode && !(selectedDocId && classifications[selectedDocId]?.access_level)) || (isBulkMode && !stagedClassification.access_level) ? (
                 <p className="text-sm text-muted-foreground text-center py-4">Select access level first</p>
               ) : allDivisions.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">No divisions available</p>
@@ -1644,7 +2034,9 @@ export function ClassificationInterface({
                 <div className="flex flex-wrap gap-2">
                   {allDivisions.map((div) => {
                     const divisionColor = getDivisionColor(div.name)
-                    const isSelected = classifications[selectedDocId]?.divisionId === div.id
+                    const isSelected = isBulkMode
+                      ? stagedClassification.divisionId === div.id
+                      : selectedDocId && classifications[selectedDocId]?.divisionId === div.id
 
                     return (
                       <button
@@ -1691,7 +2083,7 @@ export function ClassificationInterface({
               <CardTitle className="text-base">3. Select Department</CardTitle>
             </CardHeader>
             <CardContent>
-              {!selectedDocId || !classifications[selectedDocId]?.divisionId ? (
+              {(!selectedDocId && !isBulkMode) || (!isBulkMode && !(selectedDocId && classifications[selectedDocId]?.divisionId)) || (isBulkMode && !stagedClassification.divisionId) ? (
                 <p className="text-sm text-muted-foreground text-center py-4">Select access level and division first</p>
               ) : selectedDivisionDepartments.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">
@@ -1700,8 +2092,12 @@ export function ClassificationInterface({
               ) : (
                 <div className="flex flex-wrap gap-2">
                   {selectedDivisionDepartments.map((dept) => {
-                    const isSelected = classifications[selectedDocId]?.departmentId === dept.id
-                    const divisionName = classifications[selectedDocId]?.divisionName
+                    const isSelected = isBulkMode
+                      ? stagedClassification.departmentId === dept.id
+                      : selectedDocId && classifications[selectedDocId]?.departmentId === dept.id
+                    const divisionName = isBulkMode
+                      ? stagedClassification.divisionName
+                      : selectedDocId && classifications[selectedDocId]?.divisionName
                     const divisionColor = divisionName ? getDivisionColor(divisionName) : null
 
                     let departmentBgColor = "rgba(226, 232, 240, 0.6)"
@@ -1754,6 +2150,70 @@ export function ClassificationInterface({
               )}
             </CardContent>
           </Card>
+
+          {/* Apply to Selected button - only visible in bulk mode */}
+          {isBulkMode && (
+            <Card className="bg-green-50 border-green-200">
+              <CardContent className="pt-4">
+                <Button
+                  onClick={handleBulkClassify}
+                  disabled={
+                    (
+                      (!stagedClassification.priority && !stagedClassification.access_level) ||
+                      (stagedClassification.access_level && (!stagedClassification.divisionId || !stagedClassification.departmentId))
+                    ) || 
+                    classifying
+                  }
+                  className="w-full bg-green-600 hover:bg-green-700 text-white"
+                  size="lg"
+                >
+                  {classifying ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Classifying...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="h-4 w-4 mr-2" />
+                      Apply to Selected ({docCount} documents)
+                    </>
+                  )}
+                </Button>
+                {!(stagedClassification.priority || (stagedClassification.access_level && stagedClassification.divisionId && stagedClassification.departmentId)) && (
+                  <p className="text-xs text-center text-green-800 mt-2">
+                    Select either priority only, or access level, division, and department
+                  </p>
+                )}
+                {(stagedClassification.priority || stagedClassification.access_level || stagedClassification.divisionName || stagedClassification.departmentName) && (
+                  <div className="mt-3 space-y-1">
+                    <p className="text-xs font-semibold text-green-900">Will apply:</p>
+                    <div className="flex flex-wrap gap-1">
+                      {stagedClassification.priority && (
+                        <Badge variant="outline" className="text-xs">
+                          Priority: {stagedClassification.priority.charAt(0).toUpperCase() + stagedClassification.priority.slice(1)}
+                        </Badge>
+                      )}
+                      {stagedClassification.access_level && (
+                        <Badge variant="outline" className="text-xs">
+                          {stagedClassification.access_level}
+                        </Badge>
+                      )}
+                      {stagedClassification.divisionName && (
+                        <Badge variant="outline" className="text-xs">
+                          {stagedClassification.divisionName}
+                        </Badge>
+                      )}
+                      {stagedClassification.departmentName && (
+                        <Badge variant="outline" className="text-xs">
+                          {stagedClassification.departmentName}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     )
@@ -1770,6 +2230,25 @@ export function ClassificationInterface({
   }
 
   const hasRealFolders = folders.some((folder) => folder.id !== UNASSIGNED_FOLDER_ID)
+
+  // Clear all filters function
+  const handleClearFilters = () => {
+    setFilterPriority(null)
+    setFilterAccess(null)
+    setFilterDivision(null)
+    setFilterDepartment(null)
+    setCurrentPage(1)
+  }
+
+  // Check if any filters are active
+  const hasActiveFilters = filterPriority || filterAccess || filterDivision || filterDepartment
+
+  // Handle division filter change - clear department when division changes
+  const handleDivisionFilterChange = (value: string) => {
+    setFilterDivision(value === "all" ? null : value)
+    setFilterDepartment(null) // Clear department when division changes
+    setCurrentPage(1)
+  }
 
   return (
     <div className="space-y-6">
@@ -1805,6 +2284,7 @@ export function ClassificationInterface({
               )}
             </Button>
           </div>
+
           {selectedFolderIds.length > 0 && (
             <div className="mt-3 flex items-center gap-2">
               <Badge variant="secondary" className="text-xs">
@@ -1835,25 +2315,13 @@ export function ClassificationInterface({
 
       {/* Tabs for Unclassified Documents */}
       <Tabs value={activeUnclassifiedTab} onValueChange={setActiveUnclassifiedTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="classify" className="px-8">
-            All ({filteredUnclassifiedDocs.length})
-          </TabsTrigger>
-          <TabsTrigger value="classify-red" className="px-8">
-            <span className="mr-2 inline-block h-2 w-2 rounded-full bg-red-500" />
-            Red ({filteredRedDocs.length})
-          </TabsTrigger>
-          <TabsTrigger value="classify-yellow" className="px-8">
-            <span className="mr-2 inline-block h-2 w-2 rounded-full bg-yellow-500" />
-            Yellow ({filteredYellowDocs.length})
-          </TabsTrigger>
-          <TabsTrigger value="classify-green" className="px-8">
-            <span className="mr-2 inline-block h-2 w-2 rounded-full bg-green-500" />
-            Green ({filteredGreenDocs.length})
+            Unclassified
           </TabsTrigger>
           <TabsTrigger value="classified" className="px-8">
             <Check className="mr-2 h-4 w-4" />
-            Classified ({classifiedDocs.length})
+            Classified
           </TabsTrigger>
         </TabsList>
 
@@ -1871,25 +2339,140 @@ export function ClassificationInterface({
                     Export CSV
                   </Button>
                   {selectedClassifiedIds.size > 0 && (
-                    <Button variant="destructive" size="sm" onClick={() => handleBulkDelete(true)} className="gap-2">
-                      {" "}
-                      {/* Pass true for classified */}
-                      {deleting ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" /> Deleting...
-                        </>
-                      ) : (
-                        <>
-                          <Trash2 className="h-4 w-4" /> Delete {selectedClassifiedIds.size} selected
-                        </>
-                      )}
-                    </Button>
+                    <>
+                      <Button variant="secondary" size="sm" onClick={handleBulkUnclassify} className="gap-2">
+                        {deleting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" /> Unclassifying...
+                          </>
+                        ) : (
+                          <>
+                            <X className="h-4 w-4" /> Unclassify {selectedClassifiedIds.size} selected
+                          </>
+                        )}
+                      </Button>
+                      <Button variant="destructive" size="sm" onClick={() => handleBulkDelete(true)} className="gap-2">
+                        {deleting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" /> Deleting...
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="h-4 w-4" /> Delete {selectedClassifiedIds.size} selected
+                          </>
+                        )}
+                      </Button>
+                    </>
                   )}
                   <Badge variant="secondary">{totalClassified}</Badge>
                 </div>
               </CardTitle>
             </CardHeader>
             <CardContent>
+              {/* Filters for classified documents */}
+              <div className="mb-4 flex gap-2 items-center flex-wrap">
+                <Select value={filterPriority || "all"} onValueChange={(value) => {
+                  setFilterPriority(value === "all" ? null : value)
+                  setCurrentPage(1)
+                }}>
+                  <SelectTrigger className="w-[140px]">
+                    <SelectValue placeholder="Priority" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Priorities</SelectItem>
+                    <SelectItem value="red">Red</SelectItem>
+                    <SelectItem value="yellow">Yellow</SelectItem>
+                    <SelectItem value="green">Green</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select value={filterAccess || "all"} onValueChange={(value) => {
+                  setFilterAccess(value === "all" ? null : value)
+                  setCurrentPage(1)
+                }}>
+                  <SelectTrigger className="w-[140px]">
+                    <SelectValue placeholder="Access" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Access</SelectItem>
+                    <SelectItem value="Public">Public</SelectItem>
+                    <SelectItem value="Sea Org">Sea Org</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select value={filterDivision || "all"} onValueChange={handleDivisionFilterChange}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Division" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Divisions</SelectItem>
+                    {allDivisions.map((div) => (
+                      <SelectItem key={div.id} value={div.id}>
+                        {div.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select 
+                  value={filterDepartment || "all"} 
+                  onValueChange={(value) => {
+                    setFilterDepartment(value === "all" ? null : value)
+                    setCurrentPage(1)
+                  }}
+                >
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Department" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Departments</SelectItem>
+                    {filteredDepartments.map((dept) => (
+                      <SelectItem key={dept.id} value={dept.id}>
+                        {dept.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {hasActiveFilters && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearFilters}
+                    className="h-9 px-3 text-xs bg-yellow-400 hover:bg-yellow-500 border border-black"
+                  >
+                    <XSquare className="h-3 w-3 mr-1" />
+                    Clear Filters
+                  </Button>
+                )}
+              </div>
+
+              {/* Active Filters Badges */}
+              {hasActiveFilters && (
+                <div className="mb-4 flex items-center gap-2 flex-wrap">
+                  {filterPriority && (
+                    <Badge variant="secondary" className="text-xs">
+                      Priority: {filterPriority.charAt(0).toUpperCase() + filterPriority.slice(1)}
+                    </Badge>
+                  )}
+                  {filterAccess && (
+                    <Badge variant="secondary" className="text-xs">
+                      Access: {filterAccess}
+                    </Badge>
+                  )}
+                  {filterDivision && (
+                    <Badge variant="secondary" className="text-xs">
+                      Division: {allDivisions.find(d => d.id === filterDivision)?.name || filterDivision}
+                    </Badge>
+                  )}
+                  {filterDepartment && (
+                    <Badge variant="secondary" className="text-xs">
+                      Department: {allDepartments.find(d => d.id === filterDepartment)?.name || filterDepartment}
+                    </Badge>
+                  )}
+                </div>
+              )}
+
               {selectAllClassifiedMode === "page" &&
                 selectedClassifiedIds.size === filteredClassifiedDocs.length &&
                 selectedClassifiedIds.size > 0 &&
@@ -2432,34 +3015,14 @@ export function ClassificationInterface({
                   })}
                 </TableBody>
               </Table>
+              {renderPaginationControls(totalClassified)}
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="classify" className="mt-6">
-          <div className="flex gap-6 h-[calc(100vh-16rem)]">
-            <div className="flex-1 min-w-0 overflow-hidden">{renderDocumentList(filteredUnclassifiedDocs, "all")}</div>
-            {renderClassificationPanel()}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="classify-red" className="mt-6">
-          <div className="flex gap-6 h-[calc(100vh-16rem)]">
-            <div className="flex-1 min-w-0 overflow-hidden">{renderDocumentList(filteredRedDocs, "red")}</div>
-            {renderClassificationPanel()}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="classify-yellow" className="mt-6">
-          <div className="flex gap-6 h-[calc(100vh-16rem)]">
-            <div className="flex-1 min-w-0 overflow-hidden">{renderDocumentList(filteredYellowDocs, "yellow")}</div>
-            {renderClassificationPanel()}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="classify-green" className="mt-6">
-          <div className="flex gap-6 h-[calc(100vh-16rem)]">
-            <div className="flex-1 min-w-0 overflow-hidden">{renderDocumentList(filteredGreenDocs, "green")}</div>
+          <div className="flex gap-6">
+            <div className="flex-1 min-w-0">{renderDocumentList(filteredUnclassifiedDocs, "all")}</div>
             {renderClassificationPanel()}
           </div>
         </TabsContent>

@@ -25,14 +25,46 @@ export interface Document {
   id: string
   title: string
   description: string | null
-  file_url: string
+  file_url: string | null
   file_type: string | null
-  executive_director_id: string
-  secretary_id: string
-  division_id: string
-  department_id: string
+  executive_director_id: string | null
+  secretary_id: string | null
+  division_id: string | null
+  department_id: string | null
   classified_by: string | null
-  classified_at: string
+  classified_at: string | null
   created_at: string
   updated_at: string
+  // Additional fields from migrations
+  status?: string | null
+  location?: string | null
+  access_level?: string | null
+  priority?: string | null
+  document_type_id?: string | null
+  folder_id?: string | null
+  path?: string | null
+  group_name?: string | null
+}
+
+// Database type for Supabase typing (simplified version)
+export type Database = {
+  public: {
+    Tables: {
+      documents: {
+        Row: Document
+      }
+      executive_directors: {
+        Row: ExecutiveDirector
+      }
+      secretaries: {
+        Row: Secretary
+      }
+      divisions: {
+        Row: Division
+      }
+      departments: {
+        Row: Department
+      }
+    }
+  }
 }

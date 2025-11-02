@@ -1,0 +1,14 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="600" fill="#f8f9fa"/>
+  <rect x="50" y="50" width="700" height="500" fill="white" stroke="#dee2e6" stroke-width="2" rx="8"/>
+  <text x="400" y="100" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">Configure Streaming Mode</text>
+  <rect x="200" y="150" width="400" height="60" fill="white" stroke="#dee2e6" stroke-width="1" rx="4"/>
+  <circle cx="230" cy="180" r="8" fill="#28a745"/>
+  <text x="250" y="185" font-family="Arial, sans-serif" font-size="16" fill="#333">Stream files</text>
+  <rect x="200" y="230" width="400" height="60" fill="white" stroke="#dee2e6" stroke-width="1" rx="4"/>
+  <circle cx="230" cy="260" r="8" fill="white" stroke="#dc3545" stroke-width="2"/>
+  <text x="250" y="265" font-family="Arial, sans-serif" font-size="16" fill="#333">Back up from computer (DISABLED)</text>
+  <text x="400" y="350" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#666"> Important: Do not enable any folder backups</text>
+  <rect x="300" y="420" width="200" height="40" fill="#28a745" rx="6"/>
+  <text x="400" y="445" font-family="Arial, sans-serif" font-size="14" font-weight="500" text-anchor="middle" fill="white">Continue</text>
+</svg>

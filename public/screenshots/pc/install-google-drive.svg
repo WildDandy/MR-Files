@@ -1,0 +1,28 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="600" fill="#f8f9fa"/>
+  <rect x="50" y="50" width="700" height="500" fill="white" stroke="#dee2e6" stroke-width="2" rx="8"/>
+  <text x="400" y="100" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">Install Google Drive for Desktop (Windows)</text>
+  <rect x="200" y="140" width="400" height="60" fill="#0078d4" rx="6"/>
+  <rect x="220" y="160" width="20" height="20" fill="white"/>
+  <path d="M 225 165 L 235 175 M 235 165 L 225 175" stroke="#0078d4" stroke-width="2" fill="none"/>
+  <text x="250" y="178" font-family="Arial, sans-serif" font-size="18" font-weight="500" fill="white">Google Drive Setup</text>
+  
+  <!-- Windows UI elements -->
+  <rect x="200" y="220" width="400" height="30" fill="#ffffff" stroke="#d1d5db" stroke-width="1" rx="4"/>
+  <text x="210" y="240" font-family="Arial, sans-serif" font-size="14" fill="#333">Installing... (Step 1 of 4)</text>
+  
+  <rect x="200" y="300" width="400" height="180" fill="#f8f9fa" stroke="#e5e7eb" stroke-width="1" rx="4"/>
+  <text x="400" y="280" font-family="Arial, sans-serif" font-size="16" font-weight="500" text-anchor="middle" fill="#333">Installation Progress</text>
+  
+  <rect x="220" y="320" width="360" height="20" fill="#e5e7eb" rx="10"/>
+  <rect x="220" y="320" width="270" height="20" fill="#0078d4" rx="10"/>
+  <text x="400" y="335" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#333">75% Complete</text>
+  
+  <text x="220" y="370" font-family="Arial, sans-serif" font-size="14" fill="#666">✓ Downloading components</text>
+  <text x="220" y="390" font-family="Arial, sans-serif" font-size="14" fill="#666">✓ Installing files</text>
+  <text x="220" y="410" font-family="Arial, sans-serif" font-size="14" fill="#28a745">⚳ Creating shortcuts... (in progress)</text>
+  <text x="220" y="430" font-family="Arial, sans-serif" font-size="14" fill="#999">○ Configuring settings</text>
+  <text x="220" y="450" font-family="Arial, sans-serif" font-size="14" fill="#999">○ Finalizing installation</text>
+  
+  <text x="400" y="490" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#666">Download from drive.google.com and run installer</text>
+</svg>

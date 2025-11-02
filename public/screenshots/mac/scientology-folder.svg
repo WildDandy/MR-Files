@@ -1,0 +1,28 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="600" fill="#f8f9fa"/>
+  <text x="400" y="50" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">Navigate to Scientology Folder</text>
+  <rect x="150" y="100" width="500" height="400" fill="white" stroke="#dee2e6" stroke-width="2" rx="8"/>
+  <rect x="170" y="120" width="460" height="40" fill="#4285f4" rx="4"/>
+  <text x="180" y="145" font-family="Arial, sans-serif" font-size="14" fill="white">🔍 Search</text>
+  <text x="400" y="145" font-family="Arial, sans-serif" font-size="14" fill="#aaa" text-anchor="middle">Search in Drive</text>
+  <!-- Folder structure -->
+  <rect x="200" y="180" width="40" height="32" fill="#ffd700" rx="4"/>
+  <text x="210" y="200" font-family="Arial, sans-serif" font-size="20" text-anchor="middle" fill="#333">📁</text>
+  <text x="250" y="200" font-family="Arial, sans-serif" font-size="16" fill="#333">My Drive</text>
+  
+  <rect x="240" y="220" width="40" height="32" fill="#ffcc00" rx="4"/>
+  <text x="250" y="240" font-family="Arial, sans-serif" font-size="20" text-anchor="middle" fill="#333">📁</text>
+  <text x="290" y="240" font-family="Arial, sans-serif" font-size="16" fill="#333">Scientology</text>
+  
+  <rect x="280" y="260" width="40" height="32" fill="#ff9900" rx="4"/>
+  <text x="290" y="280" font-family="Arial, sans-serif" font-size="20" text-anchor="middle" fill="#333">📁</text>
+  <text x="330" y="280" font-family="Arial, sans-serif" font-size="16" fill="#333">Courses</text>
+  
+  <!-- Files -->
+  <text x="320" y="320" font-family="Arial, sans-serif" font-size="14" fill="#666">📄 1967-dianetic-auditing-course.pdf</text>
+  <text x="320" y="345" font-family="Arial, sans-serif" font-size="14" fill="#666">📄 auditor-courses-manual.pdf</text>
+  <text x="320" y="370" font-family="Arial, sans-serif" font-size="14" fill="#666">📄 basic-auditing-procedures.pdf</text>
+  
+  <rect x="300" y="450" width="200" height="40" fill="#007bff" rx="6"/>
+  <text x="400" y="475" font-family="Arial, sans-serif" font-size="14" font-weight="500" text-anchor="middle" fill="white">Select Files</text>
+</svg>

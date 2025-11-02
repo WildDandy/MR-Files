@@ -1,0 +1,24 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="600" fill="#f8f9fa"/>
+  <text x="400" y="50" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">Copy File Paths (Mac)</text>
+  <rect x="150" y="100" width="500" height="350" fill="white" stroke="#dee2e6" stroke-width="2" rx="8"/>
+  
+  <!-- Context menu -->
+  <rect x="250" y="200" width="300" height="200" fill="white" stroke="#adb5bd" stroke-width="1" rx="4" filter="drop-shadow(0 4px 6px rgba(0,0,0,0.1))"/>
+  <text x="270" y="230" font-family="Arial, sans-serif" font-size="14" fill="#333">Open</text>
+  <text x="270" y="255" font-family="Arial, sans-serif" font-size="14" fill="#333">Get Info</text>
+  <rect x="260" y="270" width="280" height="1" fill="#dee2e6"/>
+  <text x="270" y="295" font-family="Arial, sans-serif" font-size="14" fill="#007bff">📋 Copy as Path</text>
+  <text x="270" y="320" font-family="Arial, sans-serif" font-size="14" fill="#333">Make Alias</text>
+  <rect x="260" y="335" width="280" height="1" fill="#dee2e6"/>
+  <text x="270" y="360" font-family="Arial, sans-serif" font-size="14" fill="#333">Move to Trash</text>
+  
+  <!-- Files with selection -->
+  <rect x="180" y="140" width="60" height="20" fill="#007bff" rx="2"/>
+  <text x="190" y="155" font-family="Arial, sans-serif" font-size="12" fill="white">📄 file1.pdf</text>
+  <rect x="180" y="170" width="60" height="20" fill="#007bff" rx="2"/>
+  <text x="190" y="185" font-family="Arial, sans-serif" font-size="12" fill="white">📄 file2.pdf</text>
+  
+  <text x="400" y="480" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#666">Select files → Right-click → "Copy as Path"</text>
+  <text x="400" y="505" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#28a745">✓ Or use Command+click to select, then right-click</text>
+</svg>
