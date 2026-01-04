@@ -1,15 +1,14 @@
 import { NextResponse } from "next/server"
+import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 
-// This endpoint is called by Vercel Cron
-// Configure in vercel.json with: "crons": [{ "path": "/api/cron/backup", "schedule": "0 3 * * 0" }]
-// This runs every Sunday at 3:00 AM UTC
-
-export async function GET(request: Request) {
+export async function POST() {
     try {
-        // Verify the request is from Vercel Cron (in production)
-        const authHeader = request.headers.get("authorization")
-        if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+        // Verify the requester is authenticated
+        const supabase = await createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
         }
 
@@ -36,8 +35,8 @@ export async function GET(request: Request) {
         const backup = {
             version: "1.0",
             exportedAt: new Date().toISOString(),
-            exportedBy: "cron-job",
-            type: "automatic",
+            exportedBy: user.email,
+            type: "manual-cloud",
             data: {
                 documents: documents || [],
                 divisions: divisions || [],
@@ -58,9 +57,9 @@ export async function GET(request: Request) {
 
         // Generate filename with date - use .gz for compressed files
         const date = new Date().toISOString().split("T")[0]
-        const filename = `auto-backup-${date}.json.gz`
+        const filename = `manual-backup-${date}-${Date.now()}.json.gz`
 
-        // Compress the backup to save space on free tiers
+        // Compress the backup to save space
         const { gzipSync } = await import("zlib")
         const compressedBackup = gzipSync(JSON.stringify(backup))
 
@@ -73,63 +72,44 @@ export async function GET(request: Request) {
             })
 
         if (uploadError) {
-            // If bucket doesn't exist, try to create it
+            // Bucket creation logic (simplified)
             if (uploadError.message.includes("not found") || uploadError.message.includes("Bucket")) {
-                const { error: createBucketError } = await adminClient.storage.createBucket("backups", {
-                    public: false,
-                })
-
-                if (createBucketError && !createBucketError.message.includes("already exists")) {
-                    console.error("Failed to create bucket:", createBucketError)
-                    return NextResponse.json({ error: `Failed to create storage bucket: ${createBucketError.message}` }, { status: 500 })
-                }
-
-                // Try upload again
+                await adminClient.storage.createBucket("backups", { public: false })
                 const { error: retryError } = await adminClient.storage
                     .from("backups")
                     .upload(filename, compressedBackup, {
                         contentType: "application/gzip",
                         upsert: true,
                     })
-
-                if (retryError) {
-                    console.error("Failed to upload backup:", retryError)
-                    return NextResponse.json({ error: `Failed to upload backup: ${retryError.message}` }, { status: 500 })
-                }
+                if (retryError) throw retryError
             } else {
-                console.error("Failed to upload backup:", uploadError)
-                return NextResponse.json({ error: `Failed to upload backup: ${uploadError.message}` }, { status: 500 })
+                throw uploadError
             }
         }
 
-        // Clean up old backups (keep last 3 to save space)
+        // Clean up manual backups - keep only the last 2 manual cloud backups to save space
         const { data: files } = await adminClient.storage.from("backups").list("", {
             sortBy: { column: "created_at", order: "desc" },
         })
 
         if (files) {
-            // Filter to only include auto-backups and exclude the current one or directories
-            const autoBackups = files
-                .filter(f => f.name.startsWith("auto-backup-") && f.name.endsWith(".json.gz"))
+            const manualBackups = files
+                .filter(f => f.name.startsWith("manual-backup-") && f.name.endsWith(".json.gz"))
                 .sort((a, b) => b.name.localeCompare(a.name))
 
-            if (autoBackups.length > 3) {
-                const filesToDelete = autoBackups.slice(3).map((f) => f.name)
+            if (manualBackups.length > 2) {
+                const filesToDelete = manualBackups.slice(2).map((f) => f.name)
                 await adminClient.storage.from("backups").remove(filesToDelete)
             }
         }
 
-        console.log(`Automatic backup completed and compressed: ${filename}`)
-
         return NextResponse.json({
             success: true,
             filename,
-            compressed: true,
             counts: backup.counts,
-            timestamp: backup.exportedAt,
         })
-    } catch (error) {
-        console.error("Error in cron backup:", error)
-        return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    } catch (error: any) {
+        console.error("Error in POST /api/admin/backup/cloud:", error)
+        return NextResponse.json({ error: error.message || "Internal server error" }, { status: 500 })
     }
 }

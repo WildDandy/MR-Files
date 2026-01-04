@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { createClient } from "@/lib/supabase/client"
-import { FileText, FolderTree, Plus, Trash2, Edit2, Check, X, Users, Eye, EyeOff, Download, Upload } from "lucide-react"
+import { FileText, FolderTree, Plus, Trash2, Edit2, Check, X, Users, Eye, EyeOff, Download, Upload, Cloud } from "lucide-react"
 import { bestFolderMatch, normalizeDrivePath, type FolderReference } from "@/lib/path-utils"
 
 type DocumentType = {
@@ -79,6 +79,7 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
 
   // Backup/restore state
   const [isExporting, setIsExporting] = useState(false)
+  const [isCloudExporting, setIsCloudExporting] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
   const [lastBackupInfo, setLastBackupInfo] = useState<{ date: string; counts: Record<string, number> } | null>(null)
 
@@ -547,6 +548,25 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
       alert(`Failed to export backup: ${error.message}`)
     } finally {
       setIsExporting(false)
+    }
+  }
+
+  const handleCloudBackup = async () => {
+    setIsCloudExporting(true)
+    try {
+      const response = await fetch("/api/admin/backup/cloud", { method: "POST" })
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || "Failed to save cloud backup")
+      }
+
+      const result = await response.json()
+      alert(`Cloud backup saved successfully!\n\nFile: ${result.filename}\nDocuments: ${result.counts.documents}\n\nThis backup is compressed and stored securely in Supabase.`)
+    } catch (error: any) {
+      console.error("Error saving cloud backup:", error)
+      alert(`Failed to save cloud backup: ${error.message}`)
+    } finally {
+      setIsCloudExporting(false)
     }
   }
 
@@ -1158,10 +1178,16 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
                 )}
               </p>
             </div>
-            <Button onClick={handleExportBackup} disabled={isExporting} className="gap-2">
-              <Download className="h-4 w-4" />
-              {isExporting ? "Exporting..." : "Export Backup"}
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Button onClick={handleExportBackup} disabled={isExporting} variant="outline" className="gap-2">
+                <Download className="h-4 w-4" />
+                {isExporting ? "Exporting..." : "Download JSON"}
+              </Button>
+              <Button onClick={handleCloudBackup} disabled={isCloudExporting} className="gap-2 bg-blue-600 hover:bg-blue-700">
+                <Cloud className="h-4 w-4" />
+                {isCloudExporting ? "Saving..." : "Save to Cloud"}
+              </Button>
+            </div>
           </div>
 
           {/* Import Section */}

@@ -14,38 +14,24 @@ export async function GET() {
         }
 
         const adminClient = createAdminClient()
+        const { fetchAllRecords } = await import("@/lib/supabase/utils")
 
-        // Fetch all tables that need to be backed up
+        // Fetch all tables that need to be backed up (handling pagination)
         const [
-            { data: documents, error: documentsError },
-            { data: divisions, error: divisionsError },
-            { data: departments, error: departmentsError },
-            { data: documentTypes, error: documentTypesError },
-            { data: folders, error: foldersError },
-            { data: locations, error: locationsError },
+            documents,
+            divisions,
+            departments,
+            documentTypes,
+            folders,
+            locations,
         ] = await Promise.all([
-            adminClient.from("documents").select("*"),
-            adminClient.from("divisions").select("*"),
-            adminClient.from("departments").select("*"),
-            adminClient.from("document_types").select("*"),
-            adminClient.from("folders").select("*"),
-            adminClient.from("locations").select("*"),
+            fetchAllRecords(adminClient, "documents"),
+            fetchAllRecords(adminClient, "divisions"),
+            fetchAllRecords(adminClient, "departments"),
+            fetchAllRecords(adminClient, "document_types"),
+            fetchAllRecords(adminClient, "folders"),
+            fetchAllRecords(adminClient, "locations"),
         ])
-
-        // Check for errors
-        const errors = [
-            documentsError && `documents: ${documentsError.message}`,
-            divisionsError && `divisions: ${divisionsError.message}`,
-            departmentsError && `departments: ${departmentsError.message}`,
-            documentTypesError && `document_types: ${documentTypesError.message}`,
-            foldersError && `folders: ${foldersError.message}`,
-            locationsError && `locations: ${locationsError.message}`,
-        ].filter(Boolean)
-
-        if (errors.length > 0) {
-            console.error("Backup errors:", errors)
-            return NextResponse.json({ error: `Failed to export some tables: ${errors.join(", ")}` }, { status: 500 })
-        }
 
         const backup = {
             version: "1.0",
