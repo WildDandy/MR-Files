@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { createClient } from "@/lib/supabase/client"
-import { FileText, FolderTree, Plus, Trash2, Edit2, Check, X } from "lucide-react"
+import { FileText, FolderTree, Plus, Trash2, Edit2, Check, X, Users, Eye, EyeOff } from "lucide-react"
 import { bestFolderMatch, normalizeDrivePath, type FolderReference } from "@/lib/path-utils"
 
 type DocumentType = {
@@ -37,6 +37,14 @@ interface AdminInterfaceProps {
   organizationalStructure: ExecutiveDirector[]
 }
 
+type User = {
+  id: string
+  email: string
+  created_at: string
+  last_sign_in_at: string | null
+  email_confirmed_at: string | null
+}
+
 
 
 export function AdminInterface({ documentTypes: initialDocTypes, organizationalStructure }: AdminInterfaceProps) {
@@ -59,6 +67,15 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
   const [isBackfilling, setIsBackfilling] = useState(false)
   const [backfillUpdatedCount, setBackfillUpdatedCount] = useState(0)
   const [backfillTotal, setBackfillTotal] = useState(0)
+
+  // User management state
+  const [users, setUsers] = useState<User[]>([])
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false)
+  const [newUserEmail, setNewUserEmail] = useState("")
+  const [newUserPassword, setNewUserPassword] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
+  const [isCreatingUser, setIsCreatingUser] = useState(false)
+  const [isDeletingUser, setIsDeletingUser] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -414,24 +431,104 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
     }
   }
 
+  // User management handlers
+  const loadUsers = async () => {
+    setIsLoadingUsers(true)
+    try {
+      const response = await fetch("/api/admin/users")
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || "Failed to load users")
+      }
+      const data = await response.json()
+      setUsers(data.users || [])
+    } catch (error) {
+      console.error("Error loading users:", error)
+      alert("Failed to load users. Please try again.")
+    } finally {
+      setIsLoadingUsers(false)
+    }
+  }
 
+  const handleCreateUser = async () => {
+    if (!newUserEmail.trim() || !newUserPassword.trim()) {
+      alert("Email and password are required")
+      return
+    }
+
+    if (newUserPassword.length < 6) {
+      alert("Password must be at least 6 characters")
+      return
+    }
+
+    setIsCreatingUser(true)
+    try {
+      const response = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: newUserEmail.trim(), password: newUserPassword }),
+      })
+
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || "Failed to create user")
+      }
+
+      setNewUserEmail("")
+      setNewUserPassword("")
+      await loadUsers()
+      alert("User created successfully!")
+    } catch (error: any) {
+      console.error("Error creating user:", error)
+      alert(`Failed to create user: ${error.message}`)
+    } finally {
+      setIsCreatingUser(false)
+    }
+  }
+
+  const handleDeleteUser = async (userId: string, userEmail: string) => {
+    if (!confirm(`Are you sure you want to delete user "${userEmail}"? This action cannot be undone.`)) {
+      return
+    }
+
+    setIsDeletingUser(userId)
+    try {
+      const response = await fetch(`/api/admin/users?id=${userId}`, {
+        method: "DELETE",
+      })
+
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || "Failed to delete user")
+      }
+
+      await loadUsers()
+      alert("User deleted successfully!")
+    } catch (error: any) {
+      console.error("Error deleting user:", error)
+      alert(`Failed to delete user: ${error.message}`)
+    } finally {
+      setIsDeletingUser(null)
+    }
+  }
 
   useEffect(() => {
     loadDivisions()
     loadDocumentCount()
+    loadUsers()
   }, [])
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold mb-2">Admin Settings</h1>
-        <p className="text-muted-foreground">Manage document types, divisions, and departments</p>
+        <p className="text-muted-foreground">Manage document types, divisions, departments, and users</p>
       </div>
 
 
 
       <Tabs defaultValue="document-types" className="w-full">
-        <TabsList className="grid w-full max-w-2xl grid-cols-2">
+        <TabsList className="grid w-full max-w-3xl grid-cols-3">
           <TabsTrigger value="document-types" className="gap-2">
             <FileText className="h-4 w-4" />
             Document Types
@@ -440,6 +537,11 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
           <TabsTrigger value="organization" className="gap-2">
             <FolderTree className="h-4 w-4" />
             Organization
+          </TabsTrigger>
+
+          <TabsTrigger value="users" className="gap-2">
+            <Users className="h-4 w-4" />
+            Users
           </TabsTrigger>
         </TabsList>
 
@@ -585,9 +687,8 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
                   {divisions.map((division) => (
                     <div
                       key={division.id}
-                      className={`border-2 border-black p-3 cursor-pointer transition-colors ${
-                        selectedDivisionId === division.id ? "bg-gray-100" : "bg-white"
-                      }`}
+                      className={`border-2 border-black p-3 cursor-pointer transition-colors ${selectedDivisionId === division.id ? "bg-gray-100" : "bg-white"
+                        }`}
                       onClick={() => setSelectedDivisionId(division.id)}
                     >
                       {editingDivisionId === division.id ? (
@@ -780,6 +881,127 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="users" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>User Management</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Create and manage users who can access the application
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Create new user form */}
+              <div className="p-4 bg-muted/50 rounded-lg border">
+                <h3 className="font-semibold mb-3">Create New User</h3>
+                <div className="flex gap-2 flex-wrap">
+                  <Input
+                    type="email"
+                    placeholder="Email address..."
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                    className="flex-1 min-w-[200px]"
+                  />
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Input
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Password (min 6 characters)..."
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleCreateUser()
+                        }
+                      }}
+                      className="pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                      onClick={() => setShowPassword(!showPassword)}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  <Button onClick={handleCreateUser} disabled={isCreatingUser} className="gap-2">
+                    <Plus className="h-4 w-4" />
+                    {isCreatingUser ? "Creating..." : "Create User"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Users list */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold">Existing Users ({users.length})</h3>
+                  <Button variant="outline" size="sm" onClick={loadUsers} disabled={isLoadingUsers}>
+                    {isLoadingUsers ? "Loading..." : "Refresh"}
+                  </Button>
+                </div>
+
+                {isLoadingUsers ? (
+                  <div className="text-center py-8 text-muted-foreground">Loading users...</div>
+                ) : users.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Users className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                    <p>No users found</p>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead>Last Sign In</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="w-[80px]">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {users.map((user) => (
+                        <TableRow key={user.id}>
+                          <TableCell className="font-mono text-sm">{user.email}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(user.created_at).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {user.last_sign_in_at
+                              ? new Date(user.last_sign_in_at).toLocaleDateString()
+                              : "Never"}
+                          </TableCell>
+                          <TableCell>
+                            {user.email_confirmed_at ? (
+                              <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                                Confirmed
+                              </span>
+                            ) : (
+                              <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
+                                Pending
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => handleDeleteUser(user.id, user.email || "")}
+                              disabled={isDeletingUser === user.id}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
