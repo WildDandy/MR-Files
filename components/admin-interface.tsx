@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { createClient } from "@/lib/supabase/client"
-import { FileText, FolderTree, Plus, Trash2, Edit2, Check, X, Users, Eye, EyeOff } from "lucide-react"
+import { FileText, FolderTree, Plus, Trash2, Edit2, Check, X, Users, Eye, EyeOff, Download, Upload } from "lucide-react"
 import { bestFolderMatch, normalizeDrivePath, type FolderReference } from "@/lib/path-utils"
 
 type DocumentType = {
@@ -76,6 +76,11 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
   const [showPassword, setShowPassword] = useState(false)
   const [isCreatingUser, setIsCreatingUser] = useState(false)
   const [isDeletingUser, setIsDeletingUser] = useState<string | null>(null)
+
+  // Backup/restore state
+  const [isExporting, setIsExporting] = useState(false)
+  const [isImporting, setIsImporting] = useState(false)
+  const [lastBackupInfo, setLastBackupInfo] = useState<{ date: string; counts: Record<string, number> } | null>(null)
 
   const supabase = createClient()
 
@@ -509,6 +514,82 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
       alert(`Failed to delete user: ${error.message}`)
     } finally {
       setIsDeletingUser(null)
+    }
+  }
+
+  // Backup/restore handlers
+  const handleExportBackup = async () => {
+    setIsExporting(true)
+    try {
+      const response = await fetch("/api/admin/backup")
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || "Failed to export backup")
+      }
+
+      const backup = await response.json()
+
+      // Create and download the file
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `backup-${new Date().toISOString().split("T")[0]}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      setLastBackupInfo({ date: backup.exportedAt, counts: backup.counts })
+      alert(`Backup exported successfully!\n\nDocuments: ${backup.counts.documents}\nDivisions: ${backup.counts.divisions}\nDepartments: ${backup.counts.departments}`)
+    } catch (error: any) {
+      console.error("Error exporting backup:", error)
+      alert(`Failed to export backup: ${error.message}`)
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  const handleImportBackup = async (file: File, mode: "merge" | "replace") => {
+    if (mode === "replace") {
+      const confirmed = confirm(
+        "⚠️ REPLACE MODE: This will DELETE all existing data and replace it with the backup.\n\nAre you absolutely sure? This cannot be undone!"
+      )
+      if (!confirmed) return
+    }
+
+    setIsImporting(true)
+    try {
+      const text = await file.text()
+      const backup = JSON.parse(text)
+
+      if (!backup.data) {
+        throw new Error("Invalid backup file format")
+      }
+
+      const response = await fetch("/api/admin/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: backup.data, mode }),
+      })
+
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || "Failed to import backup")
+      }
+
+      const result = await response.json()
+
+      // Reload data
+      await loadDivisions()
+      await loadDocumentCount()
+
+      alert(`Backup imported successfully (${mode} mode)!\n\nResults:\n${Object.entries(result.results).map(([table, info]: [string, any]) => `${table}: ${info.inserted} imported`).join("\n")}`)
+    } catch (error: any) {
+      console.error("Error importing backup:", error)
+      alert(`Failed to import backup: ${error.message}`)
+    } finally {
+      setIsImporting(false)
     }
   }
 
@@ -1053,6 +1134,83 @@ export function AdminInterface({ documentTypes: initialDocTypes, organizationalS
               <span className="font-mono">{backfillUpdatedCount} / {backfillTotal} updated</span>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-blue-500 border-2">
+        <CardHeader>
+          <CardTitle className="text-blue-600">Backup & Restore</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Export your data for safekeeping or restore from a previous backup
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Export Section */}
+          <div className="flex items-center justify-between p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <div>
+              <h3 className="font-semibold text-blue-900">Export Backup</h3>
+              <p className="text-sm text-blue-700">
+                Download all documents, divisions, departments, and settings as a JSON file.
+                {lastBackupInfo && (
+                  <span className="block mt-1 text-xs">
+                    Last backup: {new Date(lastBackupInfo.date).toLocaleString()} ({lastBackupInfo.counts.documents} documents)
+                  </span>
+                )}
+              </p>
+            </div>
+            <Button onClick={handleExportBackup} disabled={isExporting} className="gap-2">
+              <Download className="h-4 w-4" />
+              {isExporting ? "Exporting..." : "Export Backup"}
+            </Button>
+          </div>
+
+          {/* Import Section */}
+          <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-semibold text-amber-900">Import Backup</h3>
+                <p className="text-sm text-amber-700">
+                  Restore data from a previously exported backup file.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <input
+                type="file"
+                accept=".json"
+                id="backup-file-input"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) {
+                    const mode = (document.getElementById("import-mode") as HTMLSelectElement)?.value as "merge" | "replace"
+                    handleImportBackup(file, mode || "merge")
+                    e.target.value = "" // Reset input
+                  }
+                }}
+              />
+              <select
+                id="import-mode"
+                className="px-3 py-2 border-2 border-black bg-white text-sm"
+                defaultValue="merge"
+              >
+                <option value="merge">Merge (add missing data)</option>
+                <option value="replace">Replace (delete all & restore)</option>
+              </select>
+              <Button
+                variant="outline"
+                onClick={() => document.getElementById("backup-file-input")?.click()}
+                disabled={isImporting}
+                className="gap-2"
+              >
+                <Upload className="h-4 w-4" />
+                {isImporting ? "Importing..." : "Select Backup File"}
+              </Button>
+            </div>
+            <p className="text-xs text-amber-600 mt-2">
+              ⚠️ <strong>Merge</strong> adds missing records without deleting existing data. <strong>Replace</strong> deletes everything first.
+            </p>
+          </div>
         </CardContent>
       </Card>
 
